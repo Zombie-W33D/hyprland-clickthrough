@@ -1,0 +1,13 @@
+# Trusted click-through allowlist for Hyprland's overlay patch.
+# Install as /etc/hypr/clickthrough.conf (root-owned; editing needs sudo).
+#
+# One ECMAScript regex per line, matched case-insensitively against the
+# window WM_CLASS. A window matching a rule gets wl_surface / X11 input
+# shape hit-testing: clicks on transparent pixels fall through to whatever
+# is behind it.
+
+# Steam overlay-style "Hero Town" games (Wine/DXVK layered overlays)
+steam_app_.*
+
+# Example: allow an Electron overlay by class
+# my-overlay-app

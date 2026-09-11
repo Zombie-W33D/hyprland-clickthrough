@@ -1,0 +1,427 @@
+From bf0beb3da4054460904aa5fd9aa20bd68d5933fa Mon Sep 17 00:00:00 2001
+From: work <work@local>
+Date: Fri, 11 Sep 2026 15:41:14 -0800
+Subject: [PATCH] feat: trusted click-through for overlay windows (XShape input
+ region)
+
+---
+ src/Compositor.cpp                          |   3 +
+ src/debug/HyprCtl.cpp                       |  15 +++
+ src/desktop/state/ViewHitTester.cpp         |  26 ++++-
+ src/managers/TrustedClickthroughManager.cpp | 114 ++++++++++++++++++++
+ src/managers/TrustedClickthroughManager.hpp |  22 ++++
+ src/xwayland/XShapeInputRegion.cpp          |  86 +++++++++++++++
+ src/xwayland/XShapeInputRegion.hpp          |  15 +++
+ src/xwayland/XSurface.cpp                   |   3 +
+ 8 files changed, 283 insertions(+), 1 deletion(-)
+ create mode 100644 src/managers/TrustedClickthroughManager.cpp
+ create mode 100644 src/managers/TrustedClickthroughManager.hpp
+ create mode 100644 src/xwayland/XShapeInputRegion.cpp
+ create mode 100644 src/xwayland/XShapeInputRegion.hpp
+
+diff --git a/src/Compositor.cpp b/src/Compositor.cpp
+index 1d2d8b9..2db0a5f 100644
+--- a/src/Compositor.cpp
++++ b/src/Compositor.cpp
+@@ -13,6 +13,7 @@
+ #include "config/shared/monitor/MonitorRuleManager.hpp"
+ #include "pointer/cursor/CursorManager.hpp"
+ #include "managers/TokenManager.hpp"
++#include "managers/TrustedClickthroughManager.hpp"
+ #include "pointer/PointerManager.hpp"
+ #include "managers/SeatManager.hpp"
+ #include "managers/VersionKeeperManager.hpp"
+@@ -682,6 +683,8 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+ 
+             Config::mgr()->init();
+ 
++            TrustedClickthrough::load();
++
+             Log::logger->log(Log::DEBUG, "Creating the PointerManager!");
+             Pointer::mgr() = makeUnique<Pointer::CPointerManager>();
+ 
+diff --git a/src/debug/HyprCtl.cpp b/src/debug/HyprCtl.cpp
+index 060e25b..71a8eb4 100644
+--- a/src/debug/HyprCtl.cpp
++++ b/src/debug/HyprCtl.cpp
+@@ -1,5 +1,6 @@
+ #include "HyprCtl.hpp"
+ #include "output/Monitor.hpp"
++#include "managers/TrustedClickthroughManager.hpp"
+ 
+ #include <algorithm>
+ #include <format>
+@@ -1889,6 +1890,19 @@ static std::string dispatchPlugin(eHyprCtlOutputFormat format, std::string reque
+     return "ok";
+ }
+ 
++static std::string dispatchTrustedClickthrough(eHyprCtlOutputFormat format, std::string request) {
++    CVarList vars(request, 0, ' ');
++
++    for (const auto& arg : vars | std::views::drop(1)) {
++        if (arg == "reload") {
++            TrustedClickthrough::load();
++            return "ok";
++        }
++    }
++
++    return TrustedClickthrough::status();
++}
++
+ static std::string dispatchNotify(eHyprCtlOutputFormat format, std::string request) {
+     CVarList vars(request, 0, ' ');
+ 
+@@ -2027,6 +2041,7 @@ CHyprCtl::CHyprCtl() {
+     registerCommand(SHyprCtlCommand{"monitors", false, monitorsRequest});
+     registerCommand(SHyprCtlCommand{"reload", false, reloadRequest});
+     registerCommand(SHyprCtlCommand{"plugin", false, dispatchPlugin});
++    registerCommand(SHyprCtlCommand{"trusted-clickthrough", false, dispatchTrustedClickthrough});
+     registerCommand(SHyprCtlCommand{"notify", false, dispatchNotify});
+     registerCommand(SHyprCtlCommand{"dismissnotify", false, dispatchDismissNotify});
+     registerCommand(SHyprCtlCommand{"getprop", false, dispatchGetProp});
+diff --git a/src/desktop/state/ViewHitTester.cpp b/src/desktop/state/ViewHitTester.cpp
+index 1b7ecdc..08fa5ba 100644
+--- a/src/desktop/state/ViewHitTester.cpp
++++ b/src/desktop/state/ViewHitTester.cpp
+@@ -7,6 +7,7 @@
+ #include "../../config/ConfigValue.hpp"
+ #include "../../layout/space/Space.hpp"
+ #include "../../macros.hpp"
++#include "../../managers/TrustedClickthroughManager.hpp"
+ #include "../../protocols/LayerShell.hpp"
+ #include "../../protocols/XDGShell.hpp"
+ #include "../../protocols/core/Compositor.hpp"
+@@ -48,6 +49,24 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
+         return *PMODALPARENTBLOCKING && w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->anyChildModal();
+     };
+ 
++    // For an allowlisted (root-trusted) window, honour its wl_surface input
++    // region like we already do for layer surfaces: a pointer position outside
++    // that region falls through to the windows below, exactly like Omagotchi's
++    // `mask`. Only meaningful on floating windows; fully trusted windows keep
++    // their own input region from XWayland (XShape) / set_input_region.
++    const auto isClickThroughAt = [](PHLWINDOW w, const Vector2D& pos) -> bool {
++        if (!TrustedClickthrough::isTrusted(w.get()))
++            return false;
++
++        const auto SURF = w->wlSurface() ? w->wlSurface()->resource() : nullptr;
++        if (!SURF || SURF->m_current.inputIsInfinite)
++            return false;
++
++        const auto ORIGIN = w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
++        const auto REGION = SURF->m_current.effectiveInputRegion().translate(ORIGIN);
++        return !REGION.containsPoint(pos);
++    };
++
+     // pinned windows on top of floating regardless
+     if (properties & ALLOW_FLOATING) {
+         for (auto const& w : WINDOWS | std::views::reverse) {
+@@ -60,8 +79,11 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
+                 CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
+                 if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
+                     box = box.copy().expand(-HITBOX_SHRINK);
+-                if (box.containsPoint(pos))
++                if (box.containsPoint(pos)) {
++                    if (isClickThroughAt(w, pos))
++                        continue;
+                     return w;
++                }
+ 
+                 if (!w->m_isX11) {
+                     if (w->hasPopupAt(pos))
+@@ -104,6 +126,8 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
+                     if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
+                         box = box.copy().expand(-HITBOX_SHRINK);
+                     if (box.containsPoint(pos)) {
++                        if (isClickThroughAt(w, pos))
++                            continue;
+                         if (w->m_isX11 && w->isX11OverrideRedirect() && !w->m_xwaylandSurface->wantsFocus()) {
+                             // Override Redirect
+                             return focusState()->window(); // we kinda trick everything here.
+diff --git a/src/managers/TrustedClickthroughManager.cpp b/src/managers/TrustedClickthroughManager.cpp
+new file mode 100644
+index 0000000..7fd383a
+--- /dev/null
++++ b/src/managers/TrustedClickthroughManager.cpp
+@@ -0,0 +1,114 @@
++#include "managers/TrustedClickthroughManager.hpp"
++
++#include "debug/log/Logger.hpp"
++#include "desktop/state/ViewState.hpp"
++#include "desktop/view/Window.hpp"
++#include "event/EventBus.hpp"
++
++#include <algorithm>
++#include <cctype>
++#include <format>
++#include <fstream>
++#include <optional>
++#include <regex>
++#include <string>
++#include <vector>
++
++namespace TrustedClickthrough {
++
++    constexpr const char* CONFIG_PATH = "/etc/hypr/clickthrough.conf";
++
++    struct SState {
++        std::vector<std::regex> classRules;
++    };
++
++    SState& state() {
++        static SState s;
++        return s;
++    }
++
++    // Registered once (on the first `load`); re-reads the allowlist on config
++    // reloads and on compositor start, so
++    //   sudoedit /etc/hypr/clickthrough.conf && hyprctl reload
++    // applies without a restart.
++    void ensureReloadListener() {
++        static bool REGISTERED = false;
++        if (REGISTERED)
++            return;
++        REGISTERED = true;
++        static auto CONFIG_RELOAD = Event::bus()->m_events.config.reloaded.listen([] { load(); });
++        static auto START         = Event::bus()->m_events.start.listen([] { load(); });
++    }
++
++    void load() {
++        ensureReloadListener();
++
++        auto&       RULES = state().classRules;
++        RULES.clear();
++
++        std::ifstream ifs(CONFIG_PATH);
++        if (!ifs.good()) {
++            Log::logger->log(Log::DEBUG, "TrustedClickthrough: no allowlist at {}, nothing is click-through", CONFIG_PATH);
++            return;
++        }
++
++        std::string line;
++        while (std::getline(ifs, line)) {
++            line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](unsigned char c) { return !std::isspace(c); }));
++            line.erase(std::find_if(line.rbegin(), line.rend(), [](unsigned char c) { return !std::isspace(c); }).base(), line.end());
++
++            if (line.empty() || line.starts_with('#'))
++                continue;
++
++            try {
++                RULES.emplace_back(line, std::regex::ECMAScript | std::regex::icase);
++                Log::logger->log(Log::DEBUG, "TrustedClickthrough: allowed class {}" , line);
++            } catch (const std::regex_error& e) {
++                Log::logger->log(Log::ERR, "TrustedClickthrough: bad class regex '{}': {}", line, e.what());
++            }
++        }
++
++        Log::logger->log(Log::DEBUG, "TrustedClickthrough: {} class rule(s) from {}", RULES.size(), CONFIG_PATH);
++    }
++
++    bool isTrusted(const Desktop::View::CWindow* w) {
++        if (!w)
++            return false;
++
++        return isTrustedClass(w->m_class);
++    }
++
++    bool isTrustedClass(const std::string& className) {
++        if (className.empty())
++            return false;
++
++        const auto& RULES = state().classRules;
++        if (RULES.empty())
++            return false;
++
++        for (const auto& rule : RULES) {
++            if (std::regex_search(className, rule))
++                return true;
++        }
++
++        return false;
++    }
++
++    std::string status() {
++        std::string out;
++
++        const auto& RULES = state().classRules;
++        if (RULES.empty()) {
++            out = "trusted click-through: DISABLED (no rules in " + std::string(CONFIG_PATH) + ")\n";
++        } else {
++            out = "trusted click-through rules (" + std::to_string(RULES.size()) + "):\n";
++            for (const auto& w : Desktop::viewState()->windows()) {
++                if (isTrusted(w.get()))
++                    out += "  matched: " + w->m_class + " [" + std::format("{:012x}", (uintptr_t)w.get()) + "]\n";
++            }
++            out += "source: " + std::string(CONFIG_PATH);
++        }
++
++        return out;
++    }
++};
+\ No newline at end of file
+diff --git a/src/managers/TrustedClickthroughManager.hpp b/src/managers/TrustedClickthroughManager.hpp
+new file mode 100644
+index 0000000..a231532
+--- /dev/null
++++ b/src/managers/TrustedClickthroughManager.hpp
+@@ -0,0 +1,22 @@
++#pragma once
++
++#include <string>
++
++namespace Desktop::View {
++    class CWindow;
++}
++
++namespace TrustedClickthrough {
++
++    // (Re)reads the root-owned allowlist from /etc/hypr/clickthrough.conf.
++    void load();
++
++    // True if `w` matched an allowlist class rule.
++    bool isTrusted(const Desktop::View::CWindow* w);
++
++    // True if `className` matched an allowlist rule (uses the XWM class/appid).
++    bool isTrustedClass(const std::string& className);
++
++    // Human-readable state for `hyprctl trusted-clickthrough`.
++    std::string status();
++};
+\ No newline at end of file
+diff --git a/src/xwayland/XShapeInputRegion.cpp b/src/xwayland/XShapeInputRegion.cpp
+new file mode 100644
+index 0000000..0e6224d
+--- /dev/null
++++ b/src/xwayland/XShapeInputRegion.cpp
+@@ -0,0 +1,86 @@
++#include "XShapeInputRegion.hpp"
++
++#include "XSurface.hpp"
++#include "XWayland.hpp"
++#include "../debug/log/Logger.hpp"
++#include "../managers/TrustedClickthroughManager.hpp"
++#include "../protocols/core/Compositor.hpp"
++
++#ifndef NO_XWAYLAND
++#include <xcb/shape.h>
++#endif
++
++#include <optional>
++
++namespace XShapeInputRegion {
++
++#ifndef NO_XWAYLAND
++    // The XShape extension never changes at runtime; cache the result.
++    struct SShapeExtInfo {
++        bool      present = false;
++        uint32_t  eventBase = 0;
++    };
++
++    const SShapeExtInfo* shapeExtension() {
++        static std::optional<SShapeExtInfo> CACHED;
++        if (!CACHED.has_value()) {
++            CACHED = SShapeExtInfo{};
++            auto* conn = g_pXWayland && g_pXWayland->m_wm ? g_pXWayland->m_wm->getConnection() : nullptr;
++            if (!conn)
++                return &*CACHED;
++
++            const auto* ext = xcb_get_extension_data(conn, &xcb_shape_id);
++            if (ext) {
++                CACHED.value().present    = ext->present;
++                CACHED.value().eventBase = ext->first_event;
++            }
++        }
++        return &*CACHED;
++    }
++#endif
++
++    void syncInputRegion(SP<CXWaylandSurface> surf) {
++        if (!surf || !surf->m_surface)
++            return;
++
++        // Only apply to allowlisted classes; the hit-tester is what decides
++        // whether the region is honoured or not.
++        if (!TrustedClickthrough::isTrustedClass(surf->m_state.appid))
++            return;
++
++#ifndef NO_XWAYLAND
++        const auto* EXT = shapeExtension();
++        if (!EXT || !EXT->present)
++            return;
++
++        auto* conn = g_pXWayland && g_pXWayland->m_wm ? g_pXWayland->m_wm->getConnection() : nullptr;
++        if (!conn)
++            return;
++
++        const auto COOKIE = xcb_shape_get_rectangles(conn, surf->m_xID, XCB_SHAPE_SK_INPUT, XCB_SHAPE_SO_SET);
++        std::unique_ptr<xcb_shape_get_rectangles_reply_t, decltype(&free)> reply(xcb_shape_get_rectangles_reply(conn, COOKIE, nullptr), &free);
++        if (!reply)
++            return;
++
++        Hyprutils::Math::CRegion region;
++        for (int i = 0; i < reply->number_rectangles; i++) {
++            const auto& rect = reply->rectangles[i];
++            region.add(rect.x, rect.y, rect.width, rect.height);
++        }
++
++        // Region is empty when the window has no shape/fully transparent input;
++        // leave the surface alone then (an empty region would mean *everything*
++        // is click-through, same as full box to the compositor).
++        if (region.empty())
++            return;
++
++        const auto SURF = surf->m_surface;
++        SURF->m_pending.input           = region.copy();
++        SURF->m_pending.inputIsInfinite = false;
++        SURF->m_current.input           = region.copy();
++        SURF->m_current.inputIsInfinite = false;
++#else
++        (void)surf;
++#endif
++    }
++};
+\ No newline at end of file
+diff --git a/src/xwayland/XShapeInputRegion.hpp b/src/xwayland/XShapeInputRegion.hpp
+new file mode 100644
+index 0000000..57666b3
+--- /dev/null
++++ b/src/xwayland/XShapeInputRegion.hpp
+@@ -0,0 +1,15 @@
++#pragma once
++
++#include "../helpers/memory/Memory.hpp"
++
++class CXWaylandSurface;
++
++namespace XShapeInputRegion {
++
++    // Reads the X11 input shape (XShapeInput/XShapeSet) of an XWayland window
++    // and applies it as the wl_surface input region (both current and pending),
++    // so trusted click-through windows get real per-pixel hit-testing.
++    // Must be called on the main thread (safe: Hyprland's xcb connection is
++    // also drained on the main thread).
++    void syncInputRegion(SP<CXWaylandSurface> surf);
++};
+\ No newline at end of file
+diff --git a/src/xwayland/XSurface.cpp b/src/xwayland/XSurface.cpp
+index ed296f5..e513b10 100644
+--- a/src/xwayland/XSurface.cpp
++++ b/src/xwayland/XSurface.cpp
+@@ -1,4 +1,5 @@
+ #include "XSurface.hpp"
++#include "XShapeInputRegion.hpp"
+ #include "XWayland.hpp"
+ #include "../protocols/XWaylandShell.hpp"
+ #include "../protocols/core/Compositor.hpp"
+@@ -105,6 +106,8 @@ void CXWaylandSurface::ensureListeners() {
+                 return;
+             }
+ 
++            XShapeInputRegion::syncInputRegion(m_self.lock());
++
+             m_events.commit.emit();
+         });
+     }
+-- 
+2.55.0
+

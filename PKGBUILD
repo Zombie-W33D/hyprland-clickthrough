@@ -5,7 +5,7 @@
 
 pkgname=(hyprland hyprpm)
 pkgver=0.56.2
-pkgrel=3.2
+pkgrel=3.3
 pkgdesc='a highly customizable dynamic tiling Wayland compositor (trusted click-through build)'
 arch=(x86_64 aarch64)
 url="https://github.com/hyprwm/${pkgname^}"
@@ -68,7 +68,7 @@ _archive="${pkgname^}-$pkgver"
 source=("$_archive.tar.gz::https://github.com/hyprwm/Hyprland/releases/download/v$pkgver/source-v$pkgver.tar.gz"
         "hyprland-0.56.2-trusted-clickthrough.patch")
 sha256sums=('03ad3f5ef152ff44116ffd56fcf808486211ecabf4f0ba567108ee746ba5cd2e'
-            'edc7808a0442ab7ea76021c536d0f47970642da44290237ea335fafbb57ec272')
+            'fc82d97588ee477daab23ee1fb04a40ee28d51e0ed2fa2faa7f2578353a2cd23')
 
 prepare() {
 	ln -sf hyprland-source "$_archive"

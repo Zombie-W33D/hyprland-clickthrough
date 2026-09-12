@@ -1,13 +1,7 @@
-From 7de1234b72e52ad0527ff30d74744475e57f6568 Mon Sep 17 00:00:00 2001
-From: work <work@local>
-Date: Fri, 11 Sep 2026 15:41:14 -0800
-Subject: [PATCH] feat: trusted click-through for overlay windows (XShape input
- region)
-
-diff --git c/CMakeLists.txt w/CMakeLists.txt
+diff --git c/CMakeLists.txt i/CMakeLists.txt
 index cf7f53a..0ace82a 100644
 --- c/CMakeLists.txt
-+++ w/CMakeLists.txt
++++ i/CMakeLists.txt
 @@ -383,6 +383,7 @@ else()
    set(XWAYLAND_DEPENDENCIES
      xcb
@@ -16,10 +10,10 @@ index cf7f53a..0ace82a 100644
      xcb-xfixes
      xcb-icccm
      xcb-composite
-diff --git c/src/Compositor.cpp w/src/Compositor.cpp
+diff --git c/src/Compositor.cpp i/src/Compositor.cpp
 index 1d2d8b9..2db0a5f 100644
 --- c/src/Compositor.cpp
-+++ w/src/Compositor.cpp
++++ i/src/Compositor.cpp
 @@ -13,6 +13,7 @@
  #include "config/shared/monitor/MonitorRuleManager.hpp"
  #include "pointer/cursor/CursorManager.hpp"
@@ -37,10 +31,10 @@ index 1d2d8b9..2db0a5f 100644
              Log::logger->log(Log::DEBUG, "Creating the PointerManager!");
              Pointer::mgr() = makeUnique<Pointer::CPointerManager>();
  
-diff --git c/src/debug/HyprCtl.cpp w/src/debug/HyprCtl.cpp
+diff --git c/src/debug/HyprCtl.cpp i/src/debug/HyprCtl.cpp
 index 060e25b..71a8eb4 100644
 --- c/src/debug/HyprCtl.cpp
-+++ w/src/debug/HyprCtl.cpp
++++ i/src/debug/HyprCtl.cpp
 @@ -1,5 +1,6 @@
  #include "HyprCtl.hpp"
  #include "output/Monitor.hpp"
@@ -76,10 +70,10 @@ index 060e25b..71a8eb4 100644
      registerCommand(SHyprCtlCommand{"notify", false, dispatchNotify});
      registerCommand(SHyprCtlCommand{"dismissnotify", false, dispatchDismissNotify});
      registerCommand(SHyprCtlCommand{"getprop", false, dispatchGetProp});
-diff --git c/src/desktop/state/ViewHitTester.cpp w/src/desktop/state/ViewHitTester.cpp
-index 1b7ecdc..08fa5ba 100644
+diff --git c/src/desktop/state/ViewHitTester.cpp i/src/desktop/state/ViewHitTester.cpp
+index 1b7ecdc..62e761c 100644
 --- c/src/desktop/state/ViewHitTester.cpp
-+++ w/src/desktop/state/ViewHitTester.cpp
++++ i/src/desktop/state/ViewHitTester.cpp
 @@ -7,6 +7,7 @@
  #include "../../config/ConfigValue.hpp"
  #include "../../layout/space/Space.hpp"
@@ -88,31 +82,31 @@ index 1b7ecdc..08fa5ba 100644
  #include "../../protocols/LayerShell.hpp"
  #include "../../protocols/XDGShell.hpp"
  #include "../../protocols/core/Compositor.hpp"
-@@ -48,6 +49,24 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
-         return *PMODALPARENTBLOCKING && w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->anyChildModal();
-     };
+@@ -22,6 +23,24 @@
+ using namespace Desktop;
+ using namespace Desktop::View;
  
-+    // For an allowlisted (root-trusted) window, honour its wl_surface input
-+    // region like we already do for layer surfaces: a pointer position outside
-+    // that region falls through to the windows below, exactly like Omagotchi's
-+    // `mask`. Only meaningful on floating windows; fully trusted windows keep
-+    // their own input region from XWayland (XShape) / set_input_region.
-+    const auto isClickThroughAt = [](PHLWINDOW w, const Vector2D& pos) -> bool {
-+        if (!TrustedClickthrough::isTrusted(w.get()))
-+            return false;
++// For an allowlisted (root-trusted) window, honour its wl_surface input
++// region like we already do for layer surfaces: a pointer position outside
++// that region falls through to the windows below, exactly like Omagotchi's
++// `mask`. Only meaningful on floating windows; fully trusted windows keep
++// their own input region from XWayland (XShape) / set_input_region.
++bool Desktop::isClickThroughAt(PHLWINDOW w, const Vector2D& pos) {
++    if (!TrustedClickthrough::isTrusted(w.get()))
++        return false;
 +
-+        const auto SURF = w->wlSurface() ? w->wlSurface()->resource() : nullptr;
-+        if (!SURF || SURF->m_current.inputIsInfinite)
-+            return false;
++    const auto SURF = w->wlSurface() ? w->wlSurface()->resource() : nullptr;
++    if (!SURF || SURF->m_current.inputIsInfinite)
++        return false;
 +
-+        const auto ORIGIN = w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
-+        const auto REGION = SURF->m_current.effectiveInputRegion().translate(ORIGIN);
-+        return !REGION.containsPoint(pos);
-+    };
++    const auto ORIGIN = w->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
++    const auto REGION = SURF->m_current.effectiveInputRegion().translate(ORIGIN);
++    return !REGION.containsPoint(pos);
++}
 +
-     // pinned windows on top of floating regardless
-     if (properties & ALLOW_FLOATING) {
-         for (auto const& w : WINDOWS | std::views::reverse) {
+ CViewHitTester::CViewHitTester(const IViewStateTracker& tracker) : m_tracker(tracker) {
+     ;
+ }
 @@ -60,8 +79,11 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
                  CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
                  if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
@@ -135,11 +129,25 @@ index 1b7ecdc..08fa5ba 100644
                          if (w->m_isX11 && w->isX11OverrideRedirect() && !w->m_xwaylandSurface->wantsFocus()) {
                              // Override Redirect
                              return focusState()->window(); // we kinda trick everything here.
-diff --git c/src/managers/TrustedClickthroughManager.cpp w/src/managers/TrustedClickthroughManager.cpp
+diff --git c/src/desktop/state/ViewHitTester.hpp i/src/desktop/state/ViewHitTester.hpp
+index fe223a4..c8dd7ba 100644
+--- c/src/desktop/state/ViewHitTester.hpp
++++ i/src/desktop/state/ViewHitTester.hpp
+@@ -30,4 +30,9 @@ namespace Desktop {
+       private:
+         const IViewStateTracker& m_tracker;
+     };
++
++    // True when `w` is an allowlisted (root-trusted) overlay window whose
++    // input region does NOT contain `pos` — i.e. the cursor sits on a
++    // transparent pixel and should fall through to the window below.
++    bool isClickThroughAt(PHLWINDOW w, const Vector2D& pos);
+ }
+diff --git c/src/managers/TrustedClickthroughManager.cpp i/src/managers/TrustedClickthroughManager.cpp
 new file mode 100644
 index 0000000..7fd383a
 --- /dev/null
-+++ w/src/managers/TrustedClickthroughManager.cpp
++++ i/src/managers/TrustedClickthroughManager.cpp
 @@ -0,0 +1,114 @@
 +#include "managers/TrustedClickthroughManager.hpp"
 +
@@ -256,11 +264,11 @@ index 0000000..7fd383a
 +    }
 +};
 \ No newline at end of file
-diff --git c/src/managers/TrustedClickthroughManager.hpp w/src/managers/TrustedClickthroughManager.hpp
+diff --git c/src/managers/TrustedClickthroughManager.hpp i/src/managers/TrustedClickthroughManager.hpp
 new file mode 100644
 index 0000000..a231532
 --- /dev/null
-+++ w/src/managers/TrustedClickthroughManager.hpp
++++ i/src/managers/TrustedClickthroughManager.hpp
 @@ -0,0 +1,22 @@
 +#pragma once
 +
@@ -285,11 +293,38 @@ index 0000000..a231532
 +    std::string status();
 +};
 \ No newline at end of file
-diff --git c/src/xwayland/XShapeInputRegion.cpp w/src/xwayland/XShapeInputRegion.cpp
+diff --git c/src/managers/input/InputManager.cpp i/src/managers/input/InputManager.cpp
+index 187dbe8..7da50c8 100644
+--- c/src/managers/input/InputManager.cpp
++++ i/src/managers/input/InputManager.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "../../desktop/view/WLSurface.hpp"
+ #include "../../desktop/state/FocusState.hpp"
++#include "../../desktop/state/ViewHitTester.hpp"
+ #include "../../desktop/state/WindowState.hpp"
+ #include "../../protocols/CursorShape.hpp"
+ #include "../../protocols/IdleInhibit.hpp"
+@@ -708,7 +709,13 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
+                     // TODO: this looks wrong. When over a popup, it constantly is switching.
+                     // Temp fix until that's figured out. Otherwise spams windowrule lookups and other shit.
+                     if (m_lastMouseFocus.lock() != pFoundWindow || Desktop::focusState()->window() != pFoundWindow) {
+-                        if (m_mousePosDelta > *PFOLLOWMOUSETHRESHOLD || refocus) {
++                        // Focus down a layer: when the focused window is a trusted
++                        // transparent overlay (layered game) and the cursor rests on
++                        // its transparent pixels, don't let the delta gate keep it.
++                        const auto FOCUSED              = Desktop::focusState()->window();
++                        const bool OVERLAY_OFF_POINTER  = FOCUSED && Desktop::isClickThroughAt(FOCUSED, mouseCoords);
++
++                        if (m_mousePosDelta > *PFOLLOWMOUSETHRESHOLD || refocus || OVERLAY_OFF_POINTER) {
+                             const bool hasNoFollowMouse = pFoundWindow && pFoundWindow->m_ruleApplicator->noFollowMouse().valueOrDefault();
+ 
+                             if (refocus || !hasNoFollowMouse)
+diff --git c/src/xwayland/XShapeInputRegion.cpp i/src/xwayland/XShapeInputRegion.cpp
 new file mode 100644
 index 0000000..d93e706
 --- /dev/null
-+++ w/src/xwayland/XShapeInputRegion.cpp
++++ i/src/xwayland/XShapeInputRegion.cpp
 @@ -0,0 +1,81 @@
 +#include "XShapeInputRegion.hpp"
 +
@@ -373,11 +408,11 @@ index 0000000..d93e706
 +    }
 +};
 \ No newline at end of file
-diff --git c/src/xwayland/XShapeInputRegion.hpp w/src/xwayland/XShapeInputRegion.hpp
+diff --git c/src/xwayland/XShapeInputRegion.hpp i/src/xwayland/XShapeInputRegion.hpp
 new file mode 100644
 index 0000000..57666b3
 --- /dev/null
-+++ w/src/xwayland/XShapeInputRegion.hpp
++++ i/src/xwayland/XShapeInputRegion.hpp
 @@ -0,0 +1,15 @@
 +#pragma once
 +
@@ -395,10 +430,10 @@ index 0000000..57666b3
 +    void syncInputRegion(SP<CXWaylandSurface> surf);
 +};
 \ No newline at end of file
-diff --git c/src/xwayland/XSurface.cpp w/src/xwayland/XSurface.cpp
+diff --git c/src/xwayland/XSurface.cpp i/src/xwayland/XSurface.cpp
 index ed296f5..d02197f 100644
 --- c/src/xwayland/XSurface.cpp
-+++ w/src/xwayland/XSurface.cpp
++++ i/src/xwayland/XSurface.cpp
 @@ -1,4 +1,5 @@
  #include "XSurface.hpp"
 +#include "XShapeInputRegion.hpp"
@@ -425,10 +460,10 @@ index ed296f5..d02197f 100644
  bool CXWaylandSurface::wantsFocus() {
      if (m_atoms.empty())
          return true;
-diff --git c/src/xwayland/XSurface.hpp w/src/xwayland/XSurface.hpp
+diff --git c/src/xwayland/XSurface.hpp i/src/xwayland/XSurface.hpp
 index 7f85fcb..7b50d14 100644
 --- c/src/xwayland/XSurface.hpp
-+++ w/src/xwayland/XSurface.hpp
++++ i/src/xwayland/XSurface.hpp
 @@ -85,6 +85,15 @@ class CXWaylandSurface {
      bool                              m_mapped           = false;
      bool                              m_modal            = false;
@@ -445,10 +480,10 @@ index 7f85fcb..7b50d14 100644
      WP<CXWaylandSurface>              m_parent;
      WP<CXWaylandSurface>              m_self;
      std::vector<WP<CXWaylandSurface>> m_children;
-diff --git c/src/xwayland/XWM.cpp w/src/xwayland/XWM.cpp
+diff --git c/src/xwayland/XWM.cpp i/src/xwayland/XWM.cpp
 index 5cf5c7e..ec77d21 100644
 --- c/src/xwayland/XWM.cpp
-+++ w/src/xwayland/XWM.cpp
++++ i/src/xwayland/XWM.cpp
 @@ -13,6 +13,7 @@
  #include <xcb/xcb_icccm.h>
  
@@ -512,10 +547,10 @@ index 5cf5c7e..ec77d21 100644
      auto                                          xfixes_cookie = xcb_xfixes_query_version(getConnection(), XCB_XFIXES_MAJOR_VERSION, XCB_XFIXES_MINOR_VERSION);
      XCBReplyPtr<xcb_xfixes_query_version_reply_t> xfixes_reply(xcb_xfixes_query_version_reply(getConnection(), xfixes_cookie, nullptr));
  
-diff --git c/src/xwayland/XWM.hpp w/src/xwayland/XWM.hpp
+diff --git c/src/xwayland/XWM.hpp i/src/xwayland/XWM.hpp
 index 5927031..9bd65f7 100644
 --- c/src/xwayland/XWM.hpp
-+++ w/src/xwayland/XWM.hpp
++++ i/src/xwayland/XWM.hpp
 @@ -7,6 +7,7 @@
  
  #include <xcb/xcb.h>

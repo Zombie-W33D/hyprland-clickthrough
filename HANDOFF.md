@@ -127,7 +127,7 @@ too.
 - `~/.config/hypr/game-overlays.lua` (require'd last from
   `~/.config/hypr/hyprland.lua`). Per-window rules for class `steam_app_.*` /
   titles `*Hero Town*`.
-- Final rule set used:
+- Rule set used (baseline only):
   `float=true, size={monitor_w,monitor_h}, move={0,0},
    suppress_event="maximize fullscreen fullscreenoutput x11configurerequest",
    sync_fullscreen=false, no_max_size=true, no_shadow=true, decorate=false,
@@ -140,6 +140,31 @@ too.
   `hyprctl dispatch 'hl.dsp.window.{fullscreen,resize,move}({...})'` with
   `window="address:0x..."`. Old syntaxes fail with Lua errors. Window addresses
   change per session.
+
+### Bar-avoidance (Omarchy bar exclusion, added 2026-09-11)
+The overlay is a normal floating window, so Hyprland never shrinks it for the
+layer-shell bar (reserved/exclusive zones only apply to tiling). Same file
+ends with an auto-pass that re-sizes + offsets overlay windows to leave the
+`omarchy-bar` strip uncovered, and keeps following the bar:
+- computes geometry by reading the live bar layer
+  (`hl.get_layers({ monitor = mon, namespace = "omarchy-bar" })`,
+  `LayerSurface.x/y/w/h`); bar top / bottom / left / right all handled,
+  anything not edge-spanning falls back to full monitor;
+- applies with `hl.dsp.window.resize({x,y,window})` then
+  `hl.dsp.window.move({x,y,window})` (absolute, explicit window);
+- re-applies on `window.open`, on `layer.opened` / `layer.closed`
+  (`namespace == "omarchy-bar"`), and via a 1s repeat `hl.timer` that only
+  fires when the bar box signature changes — needed because the bar can be
+  dragged to another edge live without the layer being recreated;
+- keeps a per-window "already applied" cache, so it never re-dispatches when
+  the geometry is unchanged (unlike the old watchdog, this does NOT hook
+  `window.fullscreen` and only touches overlay classes).
+- Live-tested 2026-09-11: window opens at 1920x1054 @ (0,26) with the bar on
+  top and re-fits within ~1s when the bar is dragged to another edge.
+- Gotcha verified on 0.56.2: `hl.dsp.window.*({...})` returns a *dispatcher
+  object* and must be executed via `hl.dispatch(...)`, not called directly
+  (calling the builder itself is a silent no-op — no error at config load,
+  the object is just discarded; calling the object is a config error).
 
 ## Env facts
 - Omarchy, Wayland/Hyprland 0.56.2, NVIDIA RTX 3060, monitor DP-1 1920x1080.

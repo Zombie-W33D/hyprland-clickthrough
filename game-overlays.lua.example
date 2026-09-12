@@ -1,0 +1,242 @@
+-- Desktop overlay games: see-through-pixel games that float over the desktop
+-- (run via Proton/GE-Proton with WINE_LAYERED_OVERLAY_ALPHA=1 in Steam launch
+-- options). Hyprland makes each one a floating, screen-filling window instead
+-- of tiling/exclusive-fullscreen, so the desktop and your windows stay rendered
+-- underneath through the game's transparent pixels.
+--
+-- Shared rules for overlay games:
+--  - Never tile: tiling rescales the surface and can break the game's rendering.
+--  - Fill the WHOLE MONITOR like fullscreen (size = monitor_w/monitor_h, under
+--    the bar too), pinned top-left (move 0,0), but stay a normal floating
+--    window so the desktop / your windows stay visible underneath.
+--  - Suppress EVERY event a game can use to force fullscreen/maximize on
+--    XWayland ("fullscreen", "maximize", "fullscreenoutput",
+--    "x11configurerequest"): exclusive fullscreen forces an opaque surface and
+--    kills the see-through, and toggling back restores the game's small
+--    geometry. Also keep Hyprland's internal mode out of sync so the client is
+--    never told it is fullscreen (sync_fullscreen = false).
+--  - Skip Omarchy's default opacity fade so the game's own ARGB alpha is kept.
+local function game_overlay_rules()
+  return {
+    float = true,
+    -- Baseline is a full-monitor window. The bar-avoidance pass below
+    -- immediately shrinks/moves it so the Omarchy bar stays uncovered (the
+    -- bar is a layer-shell surface: it reserves no space for floating
+    -- windows), then keeps following the bar whenever it moves.
+    size = { "monitor_w", "monitor_h" },
+    move = { "0", "0" },
+    suppress_event = "maximize fullscreen fullscreenoutput x11configurerequest",
+    sync_fullscreen = false,
+    no_max_size = true,
+    no_shadow = true,
+    decorate = false,
+    tag = "-default-opacity",
+    opacity = "1.0 1.0",
+  }
+end
+
+-- A game's Hyprland `class` is the Windows exe name of its main window. While
+-- the game is running, find it with:
+--   hyprctl clients | grep -iA25 "<game title>"
+-- then add the class to the alternation below (pipe-separated, ^...$ anchored).
+local OVERLAY_GAME_CLASSES = "^(CQ.*Hero.*Town|Crusaders.*Hero.*Town)$"
+
+o.window(
+  { class = OVERLAY_GAME_CLASSES, xwayland = true },
+  game_overlay_rules()
+)
+
+-- Crusaders Quest: Hero Town launches two windows:
+--   1. "Crusaders Quest : Hero Town"  -> Hyprland class "steam" (the Steam
+--      client's own class), so it must be matched by TITLE, not class.
+--   2. "CQ Hero Town"                 -> class "steam_app_4126220" (the game's
+--      main window; steam_app_<appid> is Steam's per-game class for Proton).
+-- hyprland.lua's later `o.window("steam", { float = false })` tiling override
+-- would otherwise win on the first window — which is why this module is
+-- required AFTER that override (the last rule for a property on a window wins).
+o.window(
+  { class = "steam", title = "Crusaders Quest.*Hero Town" },
+  game_overlay_rules()
+)
+o.window(
+  { class = "^steam_app_4126220$" },
+  game_overlay_rules()
+)
+
+-- ---------------------------------------------------------------------------
+-- Omarchy bar avoidance
+--
+-- The overlay is a normal floating XWayland window, so Hyprland never shrinks
+-- it for the bar (exclusive-zone reserved areas only apply to tiled layout).
+-- We therefore read the bar's live layer geometry (namespace "omarchy-bar")
+-- and resize + offset the overlay so the bar's strip stays uncovered — top,
+-- bottom, left or right. Re-applied automatically:
+--   - when an overlay window opens,
+--   - when a layer with that namespace opens/closes (shell restart, bar
+--     appearing/disappearing),
+--   - via a light poll (every GEOMETRY_POLL_MS) that only fires when the bar
+--     geometry actually changed — needed because dragging the bar to another
+--     edge moves the layer without ever reopening it.
+-- ---------------------------------------------------------------------------
+
+local BAR_NAMESPACE    = "omarchy-bar"
+local GEOMETRY_POLL_MS = 1000
+local EPS              = 1
+
+local function is_overlay_window(w)
+  if not w then
+    return false
+  end
+
+  local cls   = w.class or ""
+  local title = w.title or ""
+
+  if cls == "steam_app_4126220" then
+    return true
+  end
+  if w.xwayland and cls:match(OVERLAY_GAME_CLASSES) then
+    return true
+  end
+  return cls == "steam" and title:match("Crusaders Quest.*Hero Town") ~= nil
+end
+
+local function first_bar(mon)
+  for _, ls in ipairs(hl.get_layers({ monitor = mon, namespace = BAR_NAMESPACE })) do
+    if ls.mapped then
+      return ls
+    end
+  end
+  return nil
+end
+
+-- Monitor box (mx,my,mw,mh) minus the bar's strip. Returns the box the overlay
+-- should occupy. Falls back to the full monitor when the bar is absent,
+-- unmapped, or docked in a way that doesn't span a full edge.
+local function subtract_bar(mx, my, mw, mh, bar)
+  local x, y, w, h = mx, my, mw, mh
+  if not bar then
+    return x, y, w, h
+  end
+
+  local bx, by, bw, bh = bar.x, bar.y, bar.w, bar.h
+
+  if bw + EPS >= mw then
+    -- full-width bar -> top or bottom edge
+    if by <= my + EPS and by + bh > my then
+      local cut = math.max(0, math.min(by + bh - my, mh))
+      y, h = my + cut, mh - cut
+    elseif by + bh >= my + mh - EPS and by < my + mh then
+      local cut = math.max(0, math.min(my + mh - by, mh))
+      h = h - cut
+    end
+  elseif bh + EPS >= mh then
+    -- full-height bar -> left or right edge
+    if bx <= mx + EPS and bx + bw > mx then
+      local cut = math.max(0, math.min(bx + bw - mx, mw))
+      x, w = mx + cut, mw - cut
+    elseif bx + bw >= mx + mw - EPS and bx < mx + mw then
+      local cut = math.max(0, math.min(mx + mw - bx, mw))
+      w = w - cut
+    end
+  end
+
+  return x, y, w, h
+end
+
+-- address -> box signature last applied, so we can skip redundant dispatches.
+local applied_to = {}
+
+local function bar_avoid(win)
+  if not is_overlay_window(win) or not win.mapped or not win.floating or win.fullscreen ~= 0 then
+    return
+  end
+
+  local mon = win.monitor
+  if not mon then
+    return
+  end
+
+  local x, y, w, h = subtract_bar(mon.x, mon.y, mon.width, mon.height, first_bar(mon))
+
+  local sig  = string.format("%d@%d@%d@%d", x, y, w, h)
+  local addr = win.address
+  if applied_to[addr] == sig then
+    return
+  end
+
+local ok = pcall(function()
+    -- resize first (absolute, keeps top-left), then move it to sit below/right
+    -- of the bar. Both target this window explicitly. Dispatcher builders
+    -- return a dispatcher object; run it via hl.dispatch().
+    hl.dispatch(hl.dsp.window.resize({ x = w, y = h, window = win }))
+    hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = win }))
+  end)
+  if ok then
+    applied_to[addr] = sig
+  end
+end
+
+local function bar_avoid_all()
+  for _, win in ipairs(hl.get_windows()) do
+    bar_avoid(win)
+  end
+end
+
+hl.on("window.open", bar_avoid)
+
+hl.on("layer.opened", function(ls)
+  if ls and ls.namespace == BAR_NAMESPACE then
+    bar_avoid_all()
+  end
+end)
+
+hl.on("layer.closed", function(ls)
+  if ls and ls.namespace == BAR_NAMESPACE then
+    bar_avoid_all()
+  end
+end)
+
+-- The bar can be dragged to another edge live without the layer closing, so
+-- also poll its geometry. Cheap no-op unless the signature actually changed.
+local last_bars = {}
+
+local function bar_signatures()
+  local sigs = {}
+  for _, mon in ipairs(hl.get_monitors()) do
+    sigs[mon.name] = ""
+    for _, ls in ipairs(hl.get_layers({ monitor = mon, namespace = BAR_NAMESPACE })) do
+      if ls.mapped then
+        sigs[mon.name] = string.format("%d,%d,%d,%d", ls.x, ls.y, ls.w, ls.h)
+      end
+    end
+  end
+  return sigs
+end
+
+local function poll_bar_geometry()
+  local sigs = bar_signatures()
+
+  if not next(last_bars) then
+    last_bars = sigs
+    return
+  end
+
+  local changed = false
+  for name, sig in pairs(sigs) do
+    if last_bars[name] ~= sig then
+      changed = true
+      break
+    end
+  end
+  last_bars = sigs
+
+  if changed then
+    bar_avoid_all()
+  end
+end
+
+hl.timer(poll_bar_geometry, { timeout = GEOMETRY_POLL_MS, type = "repeat" })
+
+-- Catch windows that were already open when this config (re)loaded.
+bar_avoid_all()
+

@@ -137,3 +137,16 @@ WINE_LAYERED_OVERLAY_ALPHA=1 WINE_LAYERED_OVERLAY_INPUT_SHAPE=1 %command%
 
 The game must stay an XWayland window (never fullscreen, no Wayland driver) so
 the fill-rate and input-shape code paths apply.
+
+### 6. Keep the overlay off your bar (optional)
+
+By default the overlay fills the whole monitor, bar included. If your desktop
+shell (e.g. the Omarchy/Quickshell bar) is a layer-shell surface, no window
+can "reserve" room for it — floating windows ignore exclusive zones. The
+example overlay config in `HANDOFF.md` ("Game overlay config") includes a
+small Hyprland-Lua pass (see `game-overlays.lua.example`) that reads the bar
+layer's live geometry
+(`hl.get_layers({ namespace = "omarchy-bar" })`) and auto-sizes/offsets each
+overlay window so the bar stays uncovered. It detects the bar on any edge
+(top/bottom/left/right), re-applies on overlay open and bar layer
+open/close, and follows interactive bar drags via a lightweight geometry poll.

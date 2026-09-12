@@ -1,0 +1,4 @@
+hyprland-*.pkg.tar.zst
+src/
+pkg/
+*.zst

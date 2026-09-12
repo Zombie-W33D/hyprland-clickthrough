@@ -1,24 +1,38 @@
-From bf0beb3da4054460904aa5fd9aa20bd68d5933fa Mon Sep 17 00:00:00 2001
+From 7de1234b72e52ad0527ff30d74744475e57f6568 Mon Sep 17 00:00:00 2001
 From: work <work@local>
 Date: Fri, 11 Sep 2026 15:41:14 -0800
 Subject: [PATCH] feat: trusted click-through for overlay windows (XShape input
  region)
 
 ---
+ CMakeLists.txt                              |   1 +
  src/Compositor.cpp                          |   3 +
  src/debug/HyprCtl.cpp                       |  15 +++
  src/desktop/state/ViewHitTester.cpp         |  26 ++++-
  src/managers/TrustedClickthroughManager.cpp | 114 ++++++++++++++++++++
  src/managers/TrustedClickthroughManager.hpp |  22 ++++
- src/xwayland/XShapeInputRegion.cpp          |  86 +++++++++++++++
+ src/xwayland/XShapeInputRegion.cpp          |  64 +++++++++++
  src/xwayland/XShapeInputRegion.hpp          |  15 +++
- src/xwayland/XSurface.cpp                   |   3 +
- 8 files changed, 283 insertions(+), 1 deletion(-)
+ src/xwayland/XSurface.cpp                   |   7 ++
+ src/xwayland/XSurface.hpp                   |   5 +
+ 10 files changed, 271 insertions(+), 1 deletion(-)
  create mode 100644 src/managers/TrustedClickthroughManager.cpp
  create mode 100644 src/managers/TrustedClickthroughManager.hpp
  create mode 100644 src/xwayland/XShapeInputRegion.cpp
  create mode 100644 src/xwayland/XShapeInputRegion.hpp
 
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cf7f53a..0ace82a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -383,6 +383,7 @@ else()
+   set(XWAYLAND_DEPENDENCIES
+     xcb
+     xcb-render
++    xcb-shape
+     xcb-xfixes
+     xcb-icccm
+     xcb-composite
 diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 index 1d2d8b9..2db0a5f 100644
 --- a/src/Compositor.cpp
@@ -290,10 +304,10 @@ index 0000000..a231532
 \ No newline at end of file
 diff --git a/src/xwayland/XShapeInputRegion.cpp b/src/xwayland/XShapeInputRegion.cpp
 new file mode 100644
-index 0000000..0e6224d
+index 0000000..b8d0b1b
 --- /dev/null
 +++ b/src/xwayland/XShapeInputRegion.cpp
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,64 @@
 +#include "XShapeInputRegion.hpp"
 +
 +#include "XSurface.hpp"
@@ -304,36 +318,11 @@ index 0000000..0e6224d
 +
 +#ifndef NO_XWAYLAND
 +#include <xcb/shape.h>
-+#endif
 +
-+#include <optional>
++#include <memory>
++#endif
 +
 +namespace XShapeInputRegion {
-+
-+#ifndef NO_XWAYLAND
-+    // The XShape extension never changes at runtime; cache the result.
-+    struct SShapeExtInfo {
-+        bool      present = false;
-+        uint32_t  eventBase = 0;
-+    };
-+
-+    const SShapeExtInfo* shapeExtension() {
-+        static std::optional<SShapeExtInfo> CACHED;
-+        if (!CACHED.has_value()) {
-+            CACHED = SShapeExtInfo{};
-+            auto* conn = g_pXWayland && g_pXWayland->m_wm ? g_pXWayland->m_wm->getConnection() : nullptr;
-+            if (!conn)
-+                return &*CACHED;
-+
-+            const auto* ext = xcb_get_extension_data(conn, &xcb_shape_id);
-+            if (ext) {
-+                CACHED.value().present    = ext->present;
-+                CACHED.value().eventBase = ext->first_event;
-+            }
-+        }
-+        return &*CACHED;
-+    }
-+#endif
 +
 +    void syncInputRegion(SP<CXWaylandSurface> surf) {
 +        if (!surf || !surf->m_surface)
@@ -345,32 +334,35 @@ index 0000000..0e6224d
 +            return;
 +
 +#ifndef NO_XWAYLAND
-+        const auto* EXT = shapeExtension();
-+        if (!EXT || !EXT->present)
-+            return;
-+
-+        auto* conn = g_pXWayland && g_pXWayland->m_wm ? g_pXWayland->m_wm->getConnection() : nullptr;
++        auto* conn = surf->getXCBConnection();
 +        if (!conn)
 +            return;
 +
-+        const auto COOKIE = xcb_shape_get_rectangles(conn, surf->m_xID, XCB_SHAPE_SK_INPUT, XCB_SHAPE_SO_SET);
++        // Constant after connect (in-memory index), cheap to call.
++        const auto* shapeExt = xcb_get_extension_data(conn, &xcb_shape_id);
++        if (!shapeExt || !shapeExt->present)
++            return;
++
++        const auto COOKIE = xcb_shape_get_rectangles(conn, surf->m_xID, XCB_SHAPE_SK_INPUT);
 +        std::unique_ptr<xcb_shape_get_rectangles_reply_t, decltype(&free)> reply(xcb_shape_get_rectangles_reply(conn, COOKIE, nullptr), &free);
 +        if (!reply)
 +            return;
 +
-+        Hyprutils::Math::CRegion region;
-+        for (int i = 0; i < reply->number_rectangles; i++) {
-+            const auto& rect = reply->rectangles[i];
-+            region.add(rect.x, rect.y, rect.width, rect.height);
-+        }
++        const int RECT_LEN = xcb_shape_get_rectangles_rectangles_length(reply.get());
++        if (RECT_LEN <= 0)
++            return;
 +
-+        // Region is empty when the window has no shape/fully transparent input;
-+        // leave the surface alone then (an empty region would mean *everything*
-+        // is click-through, same as full box to the compositor).
++        Hyprutils::Math::CRegion region;
++        const auto*              RECTS = xcb_shape_get_rectangles_rectangles(reply.get());
++        for (int i = 0; i < RECT_LEN; i++)
++            region.add(RECTS[i].x, RECTS[i].y, RECTS[i].width, RECTS[i].height);
++
++        // Empty region = no meaningful shape; do nothing (compositor keeps the
++        // default infinite region for the window).
 +        if (region.empty())
 +            return;
 +
-+        const auto SURF = surf->m_surface;
++        auto SURF = surf->m_surface;
 +        SURF->m_pending.input           = region.copy();
 +        SURF->m_pending.inputIsInfinite = false;
 +        SURF->m_current.input           = region.copy();
@@ -404,7 +396,7 @@ index 0000000..57666b3
 +};
 \ No newline at end of file
 diff --git a/src/xwayland/XSurface.cpp b/src/xwayland/XSurface.cpp
-index ed296f5..e513b10 100644
+index ed296f5..d02197f 100644
 --- a/src/xwayland/XSurface.cpp
 +++ b/src/xwayland/XSurface.cpp
 @@ -1,4 +1,5 @@
@@ -422,6 +414,33 @@ index ed296f5..e513b10 100644
              m_events.commit.emit();
          });
      }
+@@ -173,6 +176,10 @@ void CXWaylandSurface::considerMap() {
+     Log::logger->log(Log::DEBUG, "XWayland surface: considerMap, nope, we don't have a buffer");
+ }
+ 
++xcb_connection_t* CXWaylandSurface::getXCBConnection() const {
++    return g_pXWayland && g_pXWayland->m_wm ? g_pXWayland->m_wm->getConnection() : nullptr;
++}
++
+ bool CXWaylandSurface::wantsFocus() {
+     if (m_atoms.empty())
+         return true;
+diff --git a/src/xwayland/XSurface.hpp b/src/xwayland/XSurface.hpp
+index 7f85fcb..4cbcb07 100644
+--- a/src/xwayland/XSurface.hpp
++++ b/src/xwayland/XSurface.hpp
+@@ -85,6 +85,11 @@ class CXWaylandSurface {
+     bool                              m_mapped           = false;
+     bool                              m_modal            = false;
+ 
++#ifndef NO_XWAYLAND
++    // Borrow the XWM xcb connection (CXWM is a friend of this class).
++    xcb_connection_t*                 getXCBConnection() const;
++#endif
++
+     WP<CXWaylandSurface>              m_parent;
+     WP<CXWaylandSurface>              m_self;
+     std::vector<WP<CXWaylandSurface>> m_children;
 -- 
 2.55.0
 

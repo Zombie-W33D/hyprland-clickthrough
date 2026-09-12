@@ -22,15 +22,15 @@ sudo pacman -S --needed base-devel cmake ninja meson glaze hyprland-protocols
 ./build.sh
 ```
 
-Produces `hyprland-0.56.2-3.ct1-x86_64.pkg.tar.zst` (and `hyprpm-*`).
+Produces `hyprland-0.56.2-3.1-x86_64.pkg.tar.zst` (and `hyprpm-*`).
 
 ## Install / downgrade
 
 ```bash
-sudo pacman -U hyprland-0.56.2-3.ct1-x86_64.pkg.tar.zst
+sudo pacman -U hyprland-0.56.2-3.1-x86_64.pkg.tar.zst
 ```
 
-`pkgrel` is suffixed (`3.ct1`) so the mainline package can always be restored
+`pkgrel` is suffixed (`3.1`) so the mainline package can always be restored
 (downgrade):
 
 ```bash

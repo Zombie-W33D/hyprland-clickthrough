@@ -26,7 +26,7 @@ too.
 ## NEXT STEPS
 
 1. User re-logs in (fresh Hyprland session) so the new
-   `hyprland 0.56.2-3.1` binary runs:
+   `hyprland 0.56.2-3.2` binary runs:
    - Confirm: `hyprctl version | head -1` (should show 0.56.2 or the build)
    - Confirm installed pkg: `pacman -Q hyprland`
 2. Set up allowlist if not done (root-owned = trust gate):
@@ -62,9 +62,10 @@ too.
      should hold. Check that the hit-tester path is hit: `windowAt` in
      `src/desktop/state/ViewHitTester.cpp`.
 6. Post-reformat re-grab (user reformats soon, /home and /tmp wiped):
-   - Prebuilt packages: https://github.com/Zombie-W33D/hyprland-clickthrough/releases/download/v0.56.2-ct1/hyprland-0.56.2-3.1-x86_64.pkg.tar.zst
+   - Prebuilt packages (fix build): https://github.com/Zombie-W33D/hyprland-clickthrough/releases/download/v0.56.2-ct2/hyprland-0.56.2-3.2-x86_64.pkg.tar.zst
      (+ hyprpm package next to it)
-   - `sudo pacman -U hyprland-0.56.2-3.1-x86_64.pkg.tar.zst`
+   - Rollback to the original working build: v0.56.2-ct1 / hyprland-0.56.2-3.1-x86_64.pkg.tar.zst
+   - `sudo pacman -U hyprland-0.56.2-3.2-x86_64.pkg.tar.zst`
    - Or build from source: repo README (below).
    - Then re-add the allowlist (step 2) — the file lives only on this disk.
 
@@ -77,16 +78,16 @@ too.
   - `main` @ `0240f83`: PKGBUILD (pkgver 0.56.2, **pkgrel 3.1**), patch
     `hyprland-0.56.2-trusted-clickthrough.patch`, `build.sh`, README.md,
     `clickthrough.conf.example`, .gitignore.
-  - Tag + Release: `v0.56.2-ct1` (assets uploaded: hyprland + hyprpm pkgs).
+  - Tag + Release: `v0.56.2-ct2` (fix build: event-driven ShapeNotify sync; assets: hyprland + hyprpm pkgs). `v0.56.2-ct1` kept as the pre-fix rollback release.
 - Build locally:
   ```
   sudo pacman -S --needed base-devel cmake ninja meson glaze hyprland-protocols
   cd <repo> && ./build.sh -f
   ```
 - **Downgrade to upstream anytime:** `sudo pacman -S hyprland` (upstream pkgrel
-  3 < our 3.1 ⇒ pacman offers downgrade and proceeds).
+  3 < our 3.2 ⇒ pacman offers downgrade and proceeds).
 - pkgrel MUST be `integer[.integer]` format — `3.ct1` was rejected by makepkg.
-  Keep it numeric-dotted (currently `3.1`).
+  Keep it numeric-dotted (currently `3.2`).
 
 ## The patch (4 hunks + 2 new files; commit `bf0beb3`/amended, applies on
   top of v0.56.2; also carried in the repo's `.patch`):

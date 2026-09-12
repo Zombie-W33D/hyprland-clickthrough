@@ -37,10 +37,12 @@ sudo pacman -U hyprland-0.56.2-3.1-x86_64.pkg.tar.zst
 sudo pacman -S hyprland        # back to upstream 0.56.2-3
 ```
 
-## Trusting a window class (the sudo-gated part)
+## Trusting a window class (one-time root setup)
 
-The allowlist is root-owned, so elevating to "click-through-trusted" requires
-root:
+The compositor itself runs unprivileged — **no sudo is needed at runtime** to
+use click-through. Root is only required for the one-time creation/editing of
+the allowlist, which lives in a root-owned location so only root can change
+which classes become click-through:
 
 ```bash
 sudo tee /etc/hypr/clickthrough.conf <<'EOF'
@@ -50,6 +52,10 @@ EOF
 hyprctl trusted-clickthrough reload
 hyprctl trusted-clickthrough      # status
 ```
+
+`hyprctl trusted-clickthrough reload` and the click-through enforcement itself
+run with normal user privileges; root is needed for the allowlist setup and any
+later edits, nothing else.
 
 Only windows matching a rule get input-region hit-testing. Everything else is
 untouched.

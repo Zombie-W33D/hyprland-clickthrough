@@ -22,15 +22,15 @@ sudo pacman -S --needed base-devel cmake ninja meson glaze hyprland-protocols
 ./build.sh
 ```
 
-Produces `hyprland-0.56.2-3.2-x86_64.pkg.tar.zst` (and `hyprpm-*`).
+Produces `hyprland-0.56.2-3.6-x86_64.pkg.tar.zst` (and `hyprpm-*`).
 
 ## Install / downgrade
 
 ```bash
-sudo pacman -U hyprland-0.56.2-3.2-x86_64.pkg.tar.zst
+sudo pacman -U hyprland-0.56.2-3.6-x86_64.pkg.tar.zst
 ```
 
-`pkgrel` is suffixed (`3.2`) so the mainline package can always be restored
+`pkgrel` is suffixed (`3.6`) so the mainline package can always be restored
 (downgrade):
 
 ```bash
@@ -64,8 +64,9 @@ untouched.
 
 | File | Change |
 |---|---|
-| `src/xwayland/XShapeInputRegion.cpp` | reads `XShapeGetRectangles` (INPUT/SET) on each wl surface commit of a trusted class and stores it as the surface input region (current + pending); selects for `ShapeNotify` (input) so region changes without a repaint (overlay hide/media toggles) are applied immediately |
-| `src/xwayland/XWM.cpp`, `src/xwayland/XWM.hpp` | drains `ShapeNotify` events from XWayland and re-syncs the input region the instant Wine reshapes (no empty-rectangle staleness, no alt-tab needed) |
+| `src/xwayland/XShapeInputRegion.cpp` | reads `XShapeGetRectangles` (INPUT first, **CLIP fallback** — Wine flips the per-pixel mask between the two kinds) on each wl surface commit of a trusted class and stores it as the surface input region (current + pending); a full-surface rect or empty mask on both kinds ⇒ reset to the compositor default; selects for `ShapeNotify` (INPUT + CLIP) so region changes without a repaint are applied immediately |
+| `src/xwayland/XWM.cpp`, `src/xwayland/XWM.hpp` | drains `ShapeNotify` events (INPUT *and* CLIP kinds) from XWayland and re-syncs the input region the instant Wine reshapes (no empty-rectangle staleness, no alt-tab needed) |
+| `src/desktop/view/Window.cpp` | trusted overlay can't `activate()` itself (the game spams `_NET_ACTIVE_WINDOW` when focus drifts off it → used to warp the cursor to screen center + steal focus back). User-initiated focus (hover/click on opaque pixels) uses `rawWindowFocus`/`activateWindow`, so real clicks still work |
 | `src/desktop/state/ViewHitTester.cpp` | for trusted floating windows, a pointer outside the input region falls through to the windows below |
 | `src/managers/TrustedClickthroughManager.cpp` | allowlist from `/etc/hypr/clickthrough.conf`, reload hook, `hyprctl trusted-clickthrough` status/reload |
 | `src/debug/HyprCtl.cpp`, `src/Compositor.cpp` | command registration + startup load |

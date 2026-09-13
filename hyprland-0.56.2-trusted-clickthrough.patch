@@ -1,7 +1,7 @@
-diff --git c/CMakeLists.txt i/CMakeLists.txt
+diff --git a/CMakeLists.txt b/CMakeLists.txt
 index cf7f53a..0ace82a 100644
---- c/CMakeLists.txt
-+++ i/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
 @@ -383,6 +383,7 @@ else()
    set(XWAYLAND_DEPENDENCIES
      xcb
@@ -10,10 +10,10 @@ index cf7f53a..0ace82a 100644
      xcb-xfixes
      xcb-icccm
      xcb-composite
-diff --git c/src/Compositor.cpp i/src/Compositor.cpp
+diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 index 1d2d8b9..2db0a5f 100644
---- c/src/Compositor.cpp
-+++ i/src/Compositor.cpp
+--- a/src/Compositor.cpp
++++ b/src/Compositor.cpp
 @@ -13,6 +13,7 @@
  #include "config/shared/monitor/MonitorRuleManager.hpp"
  #include "pointer/cursor/CursorManager.hpp"
@@ -31,10 +31,10 @@ index 1d2d8b9..2db0a5f 100644
              Log::logger->log(Log::DEBUG, "Creating the PointerManager!");
              Pointer::mgr() = makeUnique<Pointer::CPointerManager>();
  
-diff --git c/src/debug/HyprCtl.cpp i/src/debug/HyprCtl.cpp
+diff --git a/src/debug/HyprCtl.cpp b/src/debug/HyprCtl.cpp
 index 060e25b..71a8eb4 100644
---- c/src/debug/HyprCtl.cpp
-+++ i/src/debug/HyprCtl.cpp
+--- a/src/debug/HyprCtl.cpp
++++ b/src/debug/HyprCtl.cpp
 @@ -1,5 +1,6 @@
  #include "HyprCtl.hpp"
  #include "output/Monitor.hpp"
@@ -70,10 +70,10 @@ index 060e25b..71a8eb4 100644
      registerCommand(SHyprCtlCommand{"notify", false, dispatchNotify});
      registerCommand(SHyprCtlCommand{"dismissnotify", false, dispatchDismissNotify});
      registerCommand(SHyprCtlCommand{"getprop", false, dispatchGetProp});
-diff --git c/src/desktop/state/ViewHitTester.cpp i/src/desktop/state/ViewHitTester.cpp
+diff --git a/src/desktop/state/ViewHitTester.cpp b/src/desktop/state/ViewHitTester.cpp
 index 1b7ecdc..62e761c 100644
---- c/src/desktop/state/ViewHitTester.cpp
-+++ i/src/desktop/state/ViewHitTester.cpp
+--- a/src/desktop/state/ViewHitTester.cpp
++++ b/src/desktop/state/ViewHitTester.cpp
 @@ -7,6 +7,7 @@
  #include "../../config/ConfigValue.hpp"
  #include "../../layout/space/Space.hpp"
@@ -129,10 +129,10 @@ index 1b7ecdc..62e761c 100644
                          if (w->m_isX11 && w->isX11OverrideRedirect() && !w->m_xwaylandSurface->wantsFocus()) {
                              // Override Redirect
                              return focusState()->window(); // we kinda trick everything here.
-diff --git c/src/desktop/state/ViewHitTester.hpp i/src/desktop/state/ViewHitTester.hpp
+diff --git a/src/desktop/state/ViewHitTester.hpp b/src/desktop/state/ViewHitTester.hpp
 index fe223a4..c8dd7ba 100644
---- c/src/desktop/state/ViewHitTester.hpp
-+++ i/src/desktop/state/ViewHitTester.hpp
+--- a/src/desktop/state/ViewHitTester.hpp
++++ b/src/desktop/state/ViewHitTester.hpp
 @@ -30,4 +30,9 @@ namespace Desktop {
        private:
          const IViewStateTracker& m_tracker;
@@ -143,11 +143,38 @@ index fe223a4..c8dd7ba 100644
 +    // transparent pixel and should fall through to the window below.
 +    bool isClickThroughAt(PHLWINDOW w, const Vector2D& pos);
  }
-diff --git c/src/managers/TrustedClickthroughManager.cpp i/src/managers/TrustedClickthroughManager.cpp
+diff --git a/src/desktop/view/Window.cpp b/src/desktop/view/Window.cpp
+index 8836f73..45952f6 100644
+--- a/src/desktop/view/Window.cpp
++++ b/src/desktop/view/Window.cpp
+@@ -43,6 +43,7 @@
+ #include "../../managers/ANRManager.hpp"
+ #include "../../managers/eventLoop/EventLoopManager.hpp"
+ #include "../../managers/eventLoop/EventLoopTimer.hpp"
++#include "../../managers/TrustedClickthroughManager.hpp"
+ #include "../../protocols/XDGShell.hpp"
+ #include "../../protocols/core/Compositor.hpp"
+ #include "../../protocols/core/Subcompositor.hpp"
+@@ -1364,6 +1365,14 @@ void CWindow::activate(bool force) {
+     if (Desktop::focusState()->window() == m_self)
+         return;
+ 
++    // Root-trusted click-through overlay (layered game): the game re-requests
++    // activation (_NET_ACTIVE_WINDOW) whenever focus drifts off it, and honoring
++    // that would steal focus back AND warp the cursor into the window center
++    // (warpCursor -> middle of a full-screen overlay = center of screen). Both
++    // are wrong for a click-through overlay, so never honor its self-activation.
++    if (TrustedClickthrough::isTrusted(this))
++        return;
++
+     static auto PFOCUSONACTIVATE = CConfigValue<Config::INTEGER>("misc:focus_on_activate");
+ 
+     m_isUrgent = true;
+diff --git a/src/managers/TrustedClickthroughManager.cpp b/src/managers/TrustedClickthroughManager.cpp
 new file mode 100644
 index 0000000..7fd383a
 --- /dev/null
-+++ i/src/managers/TrustedClickthroughManager.cpp
++++ b/src/managers/TrustedClickthroughManager.cpp
 @@ -0,0 +1,114 @@
 +#include "managers/TrustedClickthroughManager.hpp"
 +
@@ -264,11 +291,11 @@ index 0000000..7fd383a
 +    }
 +};
 \ No newline at end of file
-diff --git c/src/managers/TrustedClickthroughManager.hpp i/src/managers/TrustedClickthroughManager.hpp
+diff --git a/src/managers/TrustedClickthroughManager.hpp b/src/managers/TrustedClickthroughManager.hpp
 new file mode 100644
 index 0000000..a231532
 --- /dev/null
-+++ i/src/managers/TrustedClickthroughManager.hpp
++++ b/src/managers/TrustedClickthroughManager.hpp
 @@ -0,0 +1,22 @@
 +#pragma once
 +
@@ -293,10 +320,10 @@ index 0000000..a231532
 +    std::string status();
 +};
 \ No newline at end of file
-diff --git c/src/managers/input/InputManager.cpp i/src/managers/input/InputManager.cpp
+diff --git a/src/managers/input/InputManager.cpp b/src/managers/input/InputManager.cpp
 index 187dbe8..7da50c8 100644
---- c/src/managers/input/InputManager.cpp
-+++ i/src/managers/input/InputManager.cpp
+--- a/src/managers/input/InputManager.cpp
++++ b/src/managers/input/InputManager.cpp
 @@ -11,6 +11,7 @@
  
  #include "../../desktop/view/WLSurface.hpp"
@@ -320,12 +347,12 @@ index 187dbe8..7da50c8 100644
                              const bool hasNoFollowMouse = pFoundWindow && pFoundWindow->m_ruleApplicator->noFollowMouse().valueOrDefault();
  
                              if (refocus || !hasNoFollowMouse)
-diff --git c/src/xwayland/XShapeInputRegion.cpp i/src/xwayland/XShapeInputRegion.cpp
+diff --git a/src/xwayland/XShapeInputRegion.cpp b/src/xwayland/XShapeInputRegion.cpp
 new file mode 100644
-index 0000000..d93e706
+index 0000000..88fad3a
 --- /dev/null
-+++ i/src/xwayland/XShapeInputRegion.cpp
-@@ -0,0 +1,81 @@
++++ b/src/xwayland/XShapeInputRegion.cpp
+@@ -0,0 +1,106 @@
 +#include "XShapeInputRegion.hpp"
 +
 +#include "XSurface.hpp"
@@ -338,6 +365,7 @@ index 0000000..d93e706
 +#include <xcb/shape.h>
 +
 +#include <memory>
++#include <optional>
 +#endif
 +
 +namespace XShapeInputRegion {
@@ -361,36 +389,60 @@ index 0000000..d93e706
 +        if (!shapeExt || !shapeExt->present)
 +            return;
 +
-+        // Subscribe to XShape input-shape change events so we can re-sync
-+        // without waiting for a wl_surface commit. Wine/GE reshapes the input
-+        // shape with no repaint (overlay hide, media toggles) and those changes
-+        // never commit; the XWM's ShapeNotify handler drains them here.
-+        // One-time, idempotent; enable = bitmask, Input kind is bit 2.
++        auto SURF = surf->m_surface;
++
++        // Subscribe to XShape shape-change events so we can re-sync without
++        // waiting for a wl_surface commit. Wine/GE reshapes the mask with no
++        // repaint (overlay hide, media toggles) and those changes never commit;
++        // the XWM's ShapeNotify handler drains them here. Wine emits the mask on
++        // the Input OR Clip kind, so subscribe to both. One-time, idempotent;
++        // enable = bitmask of the shape kinds.
 +        if (!surf->m_inputShapeNotifySubscribed) {
-+            xcb_shape_select_input(conn, surf->m_xID, 1 << XCB_SHAPE_SK_INPUT);
++            xcb_shape_select_input(conn, surf->m_xID, (1 << XCB_SHAPE_SK_INPUT) | (1 << XCB_SHAPE_SK_CLIP));
 +            xcb_flush(conn);
 +            surf->m_inputShapeNotifySubscribed = true;
 +        }
 +
-+        const auto COOKIE = xcb_shape_get_rectangles(conn, surf->m_xID, XCB_SHAPE_SK_INPUT);
-+        std::unique_ptr<xcb_shape_get_rectangles_reply_t, decltype(&free)> reply(xcb_shape_get_rectangles_reply(conn, COOKIE, nullptr), &free);
-+        if (!reply)
++        auto readShape = [&](int kind) -> std::optional<Hyprutils::Math::CRegion> {
++            const auto COOKIE  = xcb_shape_get_rectangles(conn, surf->m_xID, kind);
++            std::unique_ptr<xcb_shape_get_rectangles_reply_t, decltype(&free)> reply(xcb_shape_get_rectangles_reply(conn, COOKIE, nullptr), &free);
++            if (!reply)
++                return std::nullopt;
++
++            const int        RECT_LEN = xcb_shape_get_rectangles_rectangles_length(reply.get());
++            const auto*      RECTS    = xcb_shape_get_rectangles_rectangles(reply.get());
++            if (RECT_LEN <= 0)
++                return Hyprutils::Math::CRegion{};
++
++            Hyprutils::Math::CRegion region;
++            for (int i = 0; i < RECT_LEN; i++)
++                region.add(RECTS[i].x, RECTS[i].y, RECTS[i].width, RECTS[i].height);
++
++            // X's default when no shape is set is a single rect covering the
++            // whole surface. Wine/GE exports the layered overlay's per-pixel
++            // mask as either the Input OR the Clip shape (it toggles between
++            // kinds), so anything that is not the full-surface default counts
++            // as a real mask.
++            const bool FULL_SURFACE = RECT_LEN == 1 && RECTS[0].x == 0 && RECTS[0].y == 0 && RECTS[0].width == SURF->m_current.size.x && RECTS[0].height == SURF->m_current.size.y;
++            if (FULL_SURFACE)
++                return Hyprutils::Math::CRegion{};
++
++            return region;
++        };
++
++        auto REGION = readShape(XCB_SHAPE_SK_INPUT);
++        if (!REGION.has_value())
 +            return;
-+
-+        const int RECT_LEN = xcb_shape_get_rectangles_rectangles_length(reply.get());
-+
-+        Hyprutils::Math::CRegion region;
-+        const auto*              RECTS = xcb_shape_get_rectangles_rectangles(reply.get());
-+        for (int i = 0; i < RECT_LEN; i++)
-+            region.add(RECTS[i].x, RECTS[i].y, RECTS[i].width, RECTS[i].height);
-+
-+        auto SURF = surf->m_surface;
++        if (REGION->empty())
++            REGION = readShape(XCB_SHAPE_SK_CLIP);
++        if (!REGION.has_value())
++            return;
 +
 +        // Empty/absent shape = the window has NO input shape, so the whole
 +        // surface is its input region (X semantics). Reset to the compositor
 +        // default instead of keeping the stale region — that early return was
 +        // exactly the "overlay hidden but click-through stuck" bug.
-+        if (RECT_LEN <= 0 || region.empty()) {
++        if (REGION->empty()) {
 +            SURF->m_pending.input.clear();
 +            SURF->m_pending.inputIsInfinite = true;
 +            SURF->m_current.input.clear();
@@ -398,9 +450,9 @@ index 0000000..d93e706
 +            return;
 +        }
 +
-+        SURF->m_pending.input           = region.copy();
++        SURF->m_pending.input           = REGION->copy();
 +        SURF->m_pending.inputIsInfinite = false;
-+        SURF->m_current.input           = region.copy();
++        SURF->m_current.input           = REGION->copy();
 +        SURF->m_current.inputIsInfinite = false;
 +#else
 +        (void)surf;
@@ -408,11 +460,11 @@ index 0000000..d93e706
 +    }
 +};
 \ No newline at end of file
-diff --git c/src/xwayland/XShapeInputRegion.hpp i/src/xwayland/XShapeInputRegion.hpp
+diff --git a/src/xwayland/XShapeInputRegion.hpp b/src/xwayland/XShapeInputRegion.hpp
 new file mode 100644
 index 0000000..57666b3
 --- /dev/null
-+++ i/src/xwayland/XShapeInputRegion.hpp
++++ b/src/xwayland/XShapeInputRegion.hpp
 @@ -0,0 +1,15 @@
 +#pragma once
 +
@@ -430,10 +482,10 @@ index 0000000..57666b3
 +    void syncInputRegion(SP<CXWaylandSurface> surf);
 +};
 \ No newline at end of file
-diff --git c/src/xwayland/XSurface.cpp i/src/xwayland/XSurface.cpp
+diff --git a/src/xwayland/XSurface.cpp b/src/xwayland/XSurface.cpp
 index ed296f5..d02197f 100644
---- c/src/xwayland/XSurface.cpp
-+++ i/src/xwayland/XSurface.cpp
+--- a/src/xwayland/XSurface.cpp
++++ b/src/xwayland/XSurface.cpp
 @@ -1,4 +1,5 @@
  #include "XSurface.hpp"
 +#include "XShapeInputRegion.hpp"
@@ -460,10 +512,10 @@ index ed296f5..d02197f 100644
  bool CXWaylandSurface::wantsFocus() {
      if (m_atoms.empty())
          return true;
-diff --git c/src/xwayland/XSurface.hpp i/src/xwayland/XSurface.hpp
+diff --git a/src/xwayland/XSurface.hpp b/src/xwayland/XSurface.hpp
 index 7f85fcb..7b50d14 100644
---- c/src/xwayland/XSurface.hpp
-+++ i/src/xwayland/XSurface.hpp
+--- a/src/xwayland/XSurface.hpp
++++ b/src/xwayland/XSurface.hpp
 @@ -85,6 +85,15 @@ class CXWaylandSurface {
      bool                              m_mapped           = false;
      bool                              m_modal            = false;
@@ -480,10 +532,10 @@ index 7f85fcb..7b50d14 100644
      WP<CXWaylandSurface>              m_parent;
      WP<CXWaylandSurface>              m_self;
      std::vector<WP<CXWaylandSurface>> m_children;
-diff --git c/src/xwayland/XWM.cpp i/src/xwayland/XWM.cpp
-index 5cf5c7e..ec77d21 100644
---- c/src/xwayland/XWM.cpp
-+++ i/src/xwayland/XWM.cpp
+diff --git a/src/xwayland/XWM.cpp b/src/xwayland/XWM.cpp
+index 5cf5c7e..9ae4f3c 100644
+--- a/src/xwayland/XWM.cpp
++++ b/src/xwayland/XWM.cpp
 @@ -13,6 +13,7 @@
  #include <xcb/xcb_icccm.h>
  
@@ -492,13 +544,15 @@ index 5cf5c7e..ec77d21 100644
  #include "../Compositor.hpp"
  #include "../protocols/core/Seat.hpp"
  #include "../managers/eventLoop/EventLoopManager.hpp"
-@@ -834,6 +835,24 @@ bool CXWM::handleSelectionXFixesNotify(xcb_xfixes_selection_notify_event_t* e) {
+@@ -834,6 +835,26 @@ bool CXWM::handleSelectionXFixesNotify(xcb_xfixes_selection_notify_event_t* e) {
      return true;
  }
  
 +bool CXWM::handleShapeNotify(xcb_shape_notify_event_t* e) {
-+    // Only the input shape drives click-through; ignore bounding/clip changes.
-+    if (e->shape_kind != XCB_SHAPE_SK_INPUT)
++    // Wine/GE export the overlay mask on the Input OR the Clip shape kind, so
++    // both drive click-through; syncInputRegion decides whether either is a
++    // real mask.
++    if (e->shape_kind != XCB_SHAPE_SK_INPUT && e->shape_kind != XCB_SHAPE_SK_CLIP)
 +        return true;
 +
 +    const auto SURF = windowForXID(e->affected_window);
@@ -517,7 +571,7 @@ index 5cf5c7e..ec77d21 100644
  bool CXWM::handleSelectionEvent(xcb_generic_event_t* e) {
      switch (e->response_type & XCB_EVENT_RESPONSE_TYPE_MASK) {
          case XCB_SELECTION_NOTIFY: {
-@@ -852,6 +871,9 @@ bool CXWM::handleSelectionEvent(xcb_generic_event_t* e) {
+@@ -852,6 +873,9 @@ bool CXWM::handleSelectionEvent(xcb_generic_event_t* e) {
      if (e->response_type - m_xfixes->first_event == XCB_XFIXES_SELECTION_NOTIFY)
          return handleSelectionXFixesNotify(rc<xcb_xfixes_selection_notify_event_t*>(e));
  
@@ -527,7 +581,7 @@ index 5cf5c7e..ec77d21 100644
      return false;
  }
  
-@@ -910,6 +932,7 @@ void CXWM::gatherResources() {
+@@ -910,6 +934,7 @@ void CXWM::gatherResources() {
      xcb_prefetch_extension_data(getConnection(), &xcb_xfixes_id);
      xcb_prefetch_extension_data(getConnection(), &xcb_composite_id);
      xcb_prefetch_extension_data(getConnection(), &xcb_res_id);
@@ -535,7 +589,7 @@ index 5cf5c7e..ec77d21 100644
  
      for (auto& ATOM : HYPRATOMS) {
          xcb_intern_atom_cookie_t             cookie = xcb_intern_atom(getConnection(), 0, ATOM.first.length(), ATOM.first.c_str());
-@@ -928,6 +951,11 @@ void CXWM::gatherResources() {
+@@ -928,6 +953,11 @@ void CXWM::gatherResources() {
      if (!m_xfixes || !m_xfixes->present)
          Log::logger->log(Log::WARN, "XFixes not available");
  
@@ -547,10 +601,10 @@ index 5cf5c7e..ec77d21 100644
      auto                                          xfixes_cookie = xcb_xfixes_query_version(getConnection(), XCB_XFIXES_MAJOR_VERSION, XCB_XFIXES_MINOR_VERSION);
      XCBReplyPtr<xcb_xfixes_query_version_reply_t> xfixes_reply(xcb_xfixes_query_version_reply(getConnection(), xfixes_cookie, nullptr));
  
-diff --git c/src/xwayland/XWM.hpp i/src/xwayland/XWM.hpp
+diff --git a/src/xwayland/XWM.hpp b/src/xwayland/XWM.hpp
 index 5927031..9bd65f7 100644
---- c/src/xwayland/XWM.hpp
-+++ i/src/xwayland/XWM.hpp
+--- a/src/xwayland/XWM.hpp
++++ b/src/xwayland/XWM.hpp
 @@ -7,6 +7,7 @@
  
  #include <xcb/xcb.h>

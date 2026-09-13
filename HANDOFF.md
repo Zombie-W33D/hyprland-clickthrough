@@ -1,8 +1,16 @@
 # HANDOFF — Hyprland "trusted click-through" build (CQ Hero Town overlay)
 
-Last updated: 2026-09-11. Read `## NEXT STEPS` first. Everything through
-"install + allowlist" is done except the user has NOT yet re-logged in with the
-new binary.
+Last updated: 2026-09-12. Read `## NEXT STEPS` first. Current committed
+version: **ct6 / pkgrel 3.6** (tag `v0.56.2-ct6`), installed and live
+(`pacman -Q hyprland` = `0.56.2-3.6`).
+
+User-verified behavior of ct6:
+- **click-through: WORKS** (clicks on transparent pixels fall through to the
+  window below),
+- **mouse teleport: FIXED** (game no longer warps the cursor to screen center),
+- **hover-"autofocus": NOT restored** — hovering the game's transparent pixels
+  does NOT hand focus to the window below. That is the open item
+  (see NEXT STEPS).
 
 ---
 
@@ -25,49 +33,28 @@ too.
 
 ## NEXT STEPS
 
-1. User re-logs in (fresh Hyprland session) so the new
-   `hyprland 0.56.2-3.2` binary runs:
-   - Confirm: `hyprctl version | head -1` (should show 0.56.2 or the build)
-   - Confirm installed pkg: `pacman -Q hyprland`
-2. Set up allowlist if not done (root-owned = trust gate):
-   ```
-   sudo install -Dm0644 /tmp/opencode/ct1/clickthrough.conf.example /etc/hypr/clickthrough.conf
-   hyprctl trusted-clickthrough reload
-   hyprctl trusted-clickthrough        # shows rules + matched windows
-   ```
-3. Launch the game with (GitHub/Git profile launch options; already set in a
-   previous part of the session — verify still set):
-   ```
-   WINE_LAYERED_OVERLAY_ALPHA=1 WINE_LAYERED_OVERLAY_INPUT_SHAPE=1 %command%
-   ```
-   Proton: GE-Proton11-6 at `~/.local/share/Steam/compatibilitytools.d/GE-Proton11-6`.
-   Make sure window class is `steam_app_4126220*`:
-   `hyprctl clients -j | grep -i class`
-4. Verify behavior: move the mouse over a transparent (see-through) part of the
-   overlay → click should reach the window/desktop BEHIND it. Over opaque UI
-   buttons → click still hits the game.
-5. Fallback debugging if clicks still don't pass through:
-   - Check the window actually has an X input shape: `xwininfo -shape -id <winid>`
-     (win id from `hyprctl clients` address). If "no non-rectangular shape",
-     Wine isn't applying it — verify WINE_LAYERED_OVERLAY_INPUT_SHAPE is
-     actually reaching the process.
-   - Check `#!/run/user/1000/hypr/<INSTANCE>/hyprland.log` grep
-     `TrustedClickthrough` (rules load) — the shape sync itself is silent
-     except on load.
-   - Try class regex widening: `sudoedit /etc/hypr/clickthrough.conf` then
-     `hyprctl trusted-clickthrough reload`.
-   - If the wl-surface region is getting reset every commit (SurfaceState
-     pending doesn't carry `updated.bits.input`), we already write both
-     `m_current` and `m_pending` in `XShapeInputRegion::syncInputRegion`, so it
-     should hold. Check that the hit-tester path is hit: `windowAt` in
-     `src/desktop/state/ViewHitTester.cpp`.
-6. Post-reformat re-grab (user reformats soon, /home and /tmp wiped):
-   - Prebuilt packages (fix build): https://github.com/Zombie-W33D/hyprland-clickthrough/releases/download/v0.56.2-ct2/hyprland-0.56.2-3.2-x86_64.pkg.tar.zst
-     (+ hyprpm package next to it)
-   - Rollback to the original working build: v0.56.2-ct1 / hyprland-0.56.2-3.1-x86_64.pkg.tar.zst
-   - `sudo pacman -U hyprland-0.56.2-3.2-x86_64.pkg.tar.zst`
-   - Or build from source: repo README (below).
-   - Then re-add the allowlist (step 2) — the file lives only on this disk.
+1. ct6 (`0.56.2-3.6`) is committed + released here → rollback-safe:
+   - Install: `sudo pacman -U hyprland-0.56.2-3.6-x86_64.pkg.tar.zst` (+ `hyprpm-*`)
+   - Upstream restore anytime: `sudo pacman -S hyprland` (3 < 3.6 → downgrade).
+2. **OPEN ITEM — restore hover-"autofocus"** (hovering the game's transparent
+   pixels → the window below takes focus) WITHOUT breaking click-through or
+   reintroducing the cursor teleport. ct6 state: click-through ✓, no teleport ✓,
+   autofocus ✗.
+   - Suspects when debugging: `InputManager::mouseMoveUnified` `OVERLAY_OFF_POINTER`
+     bypass (~line 716), `Desktop::isClickThroughAt` (`ViewHitTester.cpp`),
+     the `activate()` trust gate (`src/desktop/view/Window.cpp`), and the
+     bar-avoidance auto-shrink (`~/.config/hypr/game-overlays.lua`, repo
+     `game-overlays.lua.example`) — the shrink was the original "accidental
+     autofocus fix".
+   - Live focus/cursor traces: `/tmp/bar-avoid.log` (keep the debug hooks).
+3. Allowlist (re-setup if needed): `/etc/hypr/clickthrough.conf` = `steam_app_.*`;
+   `hyprctl trusted-clickthrough reload`.
+4. Game launch options:
+   `WINE_LAYERED_OVERLAY_ALPHA=1 WINE_LAYERED_OVERLAY_INPUT_SHAPE=1 %command%`
+   (GE-Proton11-6, `steam_app_4126220`).
+5. XShape probes (`/tmp/opencode`, may be wiped on reboot; needs `libxcb-shape`):
+   `shapeprobe <hex-wid>` one-shot, `shapewatch <hex-wid> <sec>` sampling
+   (game window id `0x05800004`, leading zero mandatory).
 
 ---
 
@@ -75,10 +62,11 @@ too.
 
 - Repo: `https://github.com/Zombie-W33D/hyprland-clickthrough` (public, gh
   authed as Zombie-W33D)
-  - `main` @ `0240f83`: PKGBUILD (pkgver 0.56.2, **pkgrel 3.1**), patch
-    `hyprland-0.56.2-trusted-clickthrough.patch`, `build.sh`, README.md,
-    `clickthrough.conf.example`, .gitignore.
-  - Tag + Release: `v0.56.2-ct2` (fix build: event-driven ShapeNotify sync; assets: hyprland + hyprpm pkgs). `v0.56.2-ct1` kept as the pre-fix rollback release.
+  - `main` already carries ct1→ct2→ct3 (physical ct3 at `8cac187`, docs
+    `18d875e`); **ct6 committed+tagged `v0.56.2-ct6`** (pkgrel **3.6**, patch
+    `3a0765398bcec2fa6cf2a7b67ef2150112276b4dadd23b3c6197185959425bc7`).
+  - History note: ct4/ct5 were rolled back off `main` (mis-attribution; and
+    ct4's commit sits on `origin/main` until the force-push decision).
 - Build locally:
   ```
   sudo pacman -S --needed base-devel cmake ninja meson glaze hyprland-protocols
@@ -87,10 +75,10 @@ too.
 - **Downgrade to upstream anytime:** `sudo pacman -S hyprland` (upstream pkgrel
   3 < our 3.2 ⇒ pacman offers downgrade and proceeds).
 - pkgrel MUST be `integer[.integer]` format — `3.ct1` was rejected by makepkg.
-  Keep it numeric-dotted (currently `3.2`).
+  Keep it numeric-dotted (currently **3.6**).
 
-## The patch (4 hunks + 2 new files; commit `bf0beb3`/amended, applies on
-  top of v0.56.2; also carried in the repo's `.patch`):
+## The patch (as of ct6: ~630 lines, 15 files; original ct1/ct2 core described
+  below, ct6 additions in `SESSION-2026-09-12-ct6.md`):
 - `src/managers/TrustedClickthroughManager.{hpp,cpp}` (NEW)
   - Loads `/etc/hypr/clickthrough.conf` = one ECMAScript regex per line,
     case-insensitive, matched against WM_CLASS. Root-owned file = the sudo-gated

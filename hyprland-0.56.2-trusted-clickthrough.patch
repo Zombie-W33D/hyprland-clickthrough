@@ -1,9 +1,3 @@
-From 7de1234b72e52ad0527ff30d74744475e57f6568 Mon Sep 17 00:00:00 2001
-From: work <work@local>
-Date: Fri, 11 Sep 2026 15:41:14 -0800
-Subject: [PATCH] feat: trusted click-through for overlay windows (XShape input
- region)
-
 diff --git c/CMakeLists.txt w/CMakeLists.txt
 index cf7f53a..0ace82a 100644
 --- c/CMakeLists.txt
@@ -135,6 +129,33 @@ index 1b7ecdc..08fa5ba 100644
                          if (w->m_isX11 && w->isX11OverrideRedirect() && !w->m_xwaylandSurface->wantsFocus()) {
                              // Override Redirect
                              return focusState()->window(); // we kinda trick everything here.
+diff --git c/src/desktop/view/Window.cpp w/src/desktop/view/Window.cpp
+index 8836f73..45952f6 100644
+--- c/src/desktop/view/Window.cpp
++++ w/src/desktop/view/Window.cpp
+@@ -43,6 +43,7 @@
+ #include "../../managers/ANRManager.hpp"
+ #include "../../managers/eventLoop/EventLoopManager.hpp"
+ #include "../../managers/eventLoop/EventLoopTimer.hpp"
++#include "../../managers/TrustedClickthroughManager.hpp"
+ #include "../../protocols/XDGShell.hpp"
+ #include "../../protocols/core/Compositor.hpp"
+ #include "../../protocols/core/Subcompositor.hpp"
+@@ -1364,6 +1365,14 @@ void CWindow::activate(bool force) {
+     if (Desktop::focusState()->window() == m_self)
+         return;
+ 
++    // Root-trusted click-through overlay (layered game): the game re-requests
++    // activation (_NET_ACTIVE_WINDOW) whenever focus drifts off it, and honoring
++    // that would steal focus back AND warp the cursor into the window center
++    // (warpCursor -> middle of a full-screen overlay = center of screen). Both
++    // are wrong for a click-through overlay, so never honor its self-activation.
++    if (TrustedClickthrough::isTrusted(this))
++        return;
++
+     static auto PFOCUSONACTIVATE = CConfigValue<Config::INTEGER>("misc:focus_on_activate");
+ 
+     m_isUrgent = true;
 diff --git c/src/managers/TrustedClickthroughManager.cpp w/src/managers/TrustedClickthroughManager.cpp
 new file mode 100644
 index 0000000..7fd383a

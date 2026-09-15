@@ -15,6 +15,32 @@ regular XWayland toplevels.
 > ("we don't honor input regions on toplevels, on purpose", see hyprwm/Hyprland
 > #11834), so there is no config toggle — this is a source patch.
 
+## Status — first nearly complete version
+
+This repo is at its **first nearly complete version** milestone: the core
+overlay-game loop is verified working end-to-end on the test game.
+
+### Working now
+
+1. **Renders through the test game (Crusaders Quest: Hero Town)** — see-through
+   rendering, click-through via the XShape input region on trusted windows, and
+   no cursor teleport (the game's self-`activate()` is blocked for trusted
+   overlays). Verified on class `steam_app_4126220`.
+2. **Never renders on top of Quickshell** — each overlay window's render space
+   is shrunk to *monitor minus the quickshell bar strip* and re-follows the
+   bar whenever it moves to another edge. Implemented as a self-healing audit
+   in `game-overlays.lua` (open re-audits, layer events, and a 1s repeat poll;
+   any overlay game already running when the config loads is force-floated).
+
+### Not done — roadmap
+
+3. **Render on all workspaces** so the overlay is always available (currently
+   scoped to a single workspace).
+4. **Auto-register tool** to test new games out of the box — add the class,
+   launch options, and validate the emitted input shape automatically.
+5. **Verify and fix across the game library** — confirm the treatment works as
+   intended on as many of the user's games as possible and patch the gaps.
+
 ## Build
 
 ```bash
@@ -151,3 +177,27 @@ layer's live geometry
 overlay window so the bar stays uncovered. It detects the bar on any edge
 (top/bottom/left/right), re-applies on overlay open and bar layer
 open/close, and follows interactive bar drags via a lightweight geometry poll.
+The pass self-heals: the overlay is reconciled to "monitor minus the bar
+strip" on open (with quick re-audits), layer changes, and a 1s repeat poll,
+and any overlay game that was already running when the config loaded is
+forced floating — so the config added after a launch still engages.
+
+### 7. Add the game to the overlay config (per new game)
+
+This is the step users miss: the overlay behaviour is per-game. For each new
+layered-overlay game, register its window class in `~/.config/hypr/game-overlays.lua`
+**before first launch** (find the class while it runs with
+`hyprctl clients | grep -iA25 "<game title>"`):
+
+1. Add an `o.window({ class = "^<class>$" }, game_overlay_rules())` rule.
+2. Add the same class to `is_overlay_window()` so the quickshell-avoidance
+   audit tracks it.
+
+Without these the game launches *exclusive fullscreen* (`float` unset) instead
+of as a floating overlay: the see-through rendering never engages, it covers
+the shell, and you get an opaque/black screen — running but invisible.
+
+The compositor's click-through allowlist (`/etc/hypr/clickthrough.conf`) is a
+one-time root setup and already matches every `steam_app_.*` class, so no
+trust change is needed for Steam/Proton games. Non-`steam_app` game classes
+(their own executable's class) need a line added there too.

@@ -91,6 +91,14 @@ local BAR_NAMESPACE    = "omarchy-bar"
 local GEOMETRY_POLL_MS = 1000
 local EPS              = 1
 
+-- Adding a new overlay game? Two spots:
+--   1. an o.window(... game_overlay_rules()) rule above with the game's class
+--      (find it via `hyprctl clients | grep -iA25 "<game title>"`),
+--   2. a class check in is_overlay_window() below so the quickshell-avoidance
+--      audit tracks it too.
+-- The compositor's click-through allowlist (/etc/hypr/clickthrough.conf) is a
+-- one-time root setup that already matches every `steam_app_.*` class.
+
 local function is_overlay_window(w)
   local ok, isov = pcall(function()
     if not w then
@@ -169,8 +177,19 @@ local function bar_avoid(win)
   local okm, mapped   = pcall(function() return win.mapped end)
   local okf, floating = pcall(function() return win.floating end)
   local oks, fullsc   = pcall(function() return win.fullscreen end)
-  if not okm or not okf or not oks or not mapped or not floating or fullsc ~= 0 then
+  if not okm or not okf or not oks or not mapped or fullsc ~= 0 then
     -- Not placed yet. The repeat poll will pick it up once it is.
+    return false
+  end
+
+  -- An overlay game that was already open when this config (re)loaded never
+  -- gets its float rule re-applied (rules apply at open time). Force it
+  -- floating so the see-through + quickshell-avoidance path actually engages;
+  -- sizing happens on the next audit tick.
+  if not floating then
+    pcall(function()
+      hl.dispatch(hl.dsp.window.float({ window = win, action = "set" }))
+    end)
     return false
   end
 

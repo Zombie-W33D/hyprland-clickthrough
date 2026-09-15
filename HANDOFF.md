@@ -1,6 +1,6 @@
 # HANDOFF — Hyprland "trusted click-through" build (CQ Hero Town overlay)
 
-Last updated: 2026-09-12. Read `## NEXT STEPS` first. Current committed
+Last updated: 2026-09-15. Read `## NEXT STEPS` first. Current committed
 version: **ct6 / pkgrel 3.6** (tag `v0.56.2-ct6`), installed and live
 (`pacman -Q hyprland` = `0.56.2-3.6`).
 
@@ -53,8 +53,53 @@ too.
    `WINE_LAYERED_OVERLAY_ALPHA=1 WINE_LAYERED_OVERLAY_INPUT_SHAPE=1 %command%`
    (GE-Proton11-6, `steam_app_4126220`).
 5. XShape probes (`/tmp/opencode`, may be wiped on reboot; needs `libxcb-shape`):
-   `shapeprobe <hex-wid>` one-shot, `shapewatch <hex-wid> <sec>` sampling
-   (game window id `0x05800004`, leading zero mandatory).
+    `shapeprobe <hex-wid>` one-shot, `shapewatch <hex-wid> <sec>` sampling
+    (game window id `0x05800004`, leading zero mandatory).
+ 6. **LATER — click-through does not apply to OpenPets / Linux Electron**
+    (checked in 2026-09-15, left as-is). See `## OpenPets (Electron) note`.
+
+---
+
+## OpenPets (Electron) note — no input mask, no click-through
+
+OpenPets 2.0.7 (`openpetsai/openpets`, AppImage, run via
+`./openpets --no-sandbox --ozone-platform=x11 --in-process-gpu`) is a
+transparent ARGB desktop-pet Electron app. We wanted the same per-pixel
+click-through the layered Wine games get. It does NOT work through the
+current patch, and nothing we change "outside" the compositor can fix it:
+
+- XShape probe of the pet window (`OpenPets Default Pet`, class
+  `open-pets-desktop`, XWayland, 220x320) returns `bounding rects:
+  [(0,0,220,320)]` and `input rects: [(0,0,220,320)]` — i.e. the window sets
+  **no** input shape, so `XShapeInputRegion::syncInputRegion` treats it as
+  full-surface input and `ViewHitTester::isClickThroughAt` has no region to
+  honor. Verified behaviorally: `xdotool click` on all four corners of the
+  pet keeps `open-pets-desktop` focused (no fall-through).
+- Root cause: Electron/Chromium on Linux never emits `wl_surface
+  set_input_region` / XShapeInput for transparent windows
+  (`BrowserWindow.setShape` is macOS/Windows-only, and it does not map to
+  XShape input on X11 anyway). So a trusted *allowlisted* window with no
+  per-pixel mask is indistinguishable from a fully-opaque one.
+- Honest limitation: the layering/click-through mechanism is input-shape
+  driven, and "what pixels are actually transparent" lives in the
+  rendered buffer. For apps that never publish a mask the compositor has
+  nothing to honor.
+- Options to revisit later, in order of preference:
+  1. **Compositor alpha fallback**: for allowlisted trusted windows whose
+     input region is still infinite, derive the input region from the
+     surface buffer's alpha channel (compute where alpha < threshold → not
+     input). This makes OpenPets AND any future transparent Electron/pet
+     app click-through for real, tracks animation per-frame, lives wholly in
+     the patch. Cost: renderer/buffer access in Hyprland source + rebuild +
+     flash cycle.
+  2. **External XShape-setter helper**: a small daemon measures the pet's
+     alpha (screenshot / backing) and sets XShape input rects on its X
+     window; the existing `ShapeNotify` path
+     (`CXWM::handleShapeNotify` → `syncInputRegion`) already picks those up
+     live, no re-flash needed. Caveats: external pixel reads are flaky for
+     XWayland content, and shape updates lag the sprite animation.
+- Note: the allowlist entry `^open-pets-desktop$` is harmless and can stay;
+  it only matters once an input region exists to honor.
 
 ---
 

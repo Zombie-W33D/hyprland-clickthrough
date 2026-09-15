@@ -62,6 +62,38 @@ overlay-game loop is verified working end-to-end on the test game.
 5. **Verify and fix across the game library** — confirm the treatment works as
    intended on as many of the user's games as possible and patch the gaps.
 
+## Confirmed working games
+
+Games verified on this setup, in the mode they are configured in. Registered
+via the [overlay-games](https://github.com/Zombie-W33D/overlay-games) tool
+(live registry: `~/.config/hypr/game-overlays.lua`).
+
+### Featured overlay (full-screen, see-through)
+
+| Game | Window class |
+| --- | --- |
+| Crusaders Quest: Hero Town | `steam_app_4126220` |
+| Idlemon | `steam_app_4122700` |
+| Desktop Raid | `steam_app_3122460` |
+| Tiny Monster Haven | `steam_app_3669020` |
+
+### Widget mode (self-sizing)
+
+| Game | Window class |
+| --- | --- |
+| Idle Waters | `steam_app_2963540` |
+| Berserk B.I.T.S | `steam_app_2348540` |
+| Loafing Town | `steam_app_3625210` |
+| My Little Life | `steam_app_2834600` |
+| Mushroom Nook | `steam_app_4211860` |
+| Rogue AI: Idle Domination | `steam_app_3894900` |
+| Cozy Mining | `steam_app_4283650` |
+| dEscape | `steam_app_2390060` |
+| The Dream Globe | `steam_app_3820130` |
+| Your Big, Cute Monster Farm | `steam_app_3659410` |
+| Village Tale | `steam_app_3447510` |
+| Little Aviary | `steam_app_3437350` |
+
 ## Build
 
 ```bash

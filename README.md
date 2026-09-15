@@ -39,10 +39,10 @@ overlay-game loop is verified working end-to-end on the test game.
 
 ### Known limitations
 
-- **Widget mode has no auto-focus** — widget-flagged windows aren't
-  automatically focused/activated when hovered; we still need to figure out
-  the cleanest way to give them focus without breaking the click-through.
-  Known bug, to be handled later.
+- **Widget mode auto-focus is a little buggy** — a widget-flagged window may
+  not be focused immediately when hovered. If it doesn't respect auto-focus
+  right away, several manual focus changes seem to bring auto-focus into a
+  working state from that point on. Known bug, to be handled later.
 - **Widget mode does not auto-avoid Quickshell** — widget games are never
   resized/moved to line up with the bar. This is deliberate: many such games
   don't support dynamic resizing, and force-repositioning them against the

@@ -36,6 +36,24 @@ local function game_overlay_rules()
   }
 end
 
+-- Widget variant for idle/desktop-pet games (`widget = true` registry
+-- entries) that SIZE THEMSELVES by cursor hover. They get float + click-
+-- through + fullscreen-suppression, but their geometry is left entirely to
+-- the game; the audit never forces monitor-minus-bar on them (it would just
+-- fight their expand/collapse).
+local function widget_game_overlay_rules()
+  return {
+    float = true,
+    suppress_event = "maximize fullscreen fullscreenoutput",
+    sync_fullscreen = false,
+    no_max_size = true,
+    no_shadow = true,
+    decorate = false,
+    tag = "-default-opacity",
+    opacity = "1.0 1.0",
+  }
+end
+
 -- A game's Hyprland `class` is the Windows exe name of its main window. While
 -- the game is running, find it with:
 --   hyprctl clients | grep -iA25 "<game title>"
@@ -47,6 +65,40 @@ o.window(
   game_overlay_rules()
 )
 
+-- ---------------------------------------------------------------------------
+-- OVERLAY GAME REGISTRY (managed by the "overlay-games" control tool)
+--
+-- Add/remove games here, or use the overlay-games GUI. The compositor's
+-- click-through allowlist (/etc/hypr/clickthrough.conf) already matches every
+-- `steam_app_.*` class, so Steam/Proton games only need a registry entry.
+-- Local (non-Steam) games also need their WM_CLASS in that root-owned
+-- allowlist, or clicks won't fall through.
+-- >> overlay-games-tool:begin <<
+OVERLAY_GAMES = {
+  { kind = "steam", class = "steam_app_4126220", name = "Crusaders Quest: Hero Town" },
+  -- Idle/desktop-pet games that size themselves by cursor hover: set
+  -- widget = true so they float + are click-through but keep their own size.
+  -- { kind = "steam", class = "steam_app_2348540", name = "Berserk B.I.T.S", widget = true },
+}
+-- >> overlay-games-tool:end <<
+-- ---------------------------------------------------------------------------
+
+-- Widget games own their geometry (idle games expand/collapse by hover): the
+-- audit must not force monitor-minus-bar on them.
+local WIDGET_CLASSES = {}
+for _, g in ipairs(OVERLAY_GAMES) do
+  if g.widget then
+    WIDGET_CLASSES[g.class] = true
+  end
+end
+
+for _, g in ipairs(OVERLAY_GAMES) do
+  o.window(
+    { class = "^" .. g.class .. "$" },
+    g.widget and widget_game_overlay_rules() or game_overlay_rules()
+  )
+end
+
 -- Crusaders Quest: Hero Town launches two windows:
 --   1. "Crusaders Quest : Hero Town"  -> Hyprland class "steam" (the Steam
 --      client's own class), so it must be matched by TITLE, not class.
@@ -57,10 +109,6 @@ o.window(
 -- required AFTER that override (the last rule for a property on a window wins).
 o.window(
   { class = "steam", title = "Crusaders Quest.*Hero Town" },
-  game_overlay_rules()
-)
-o.window(
-  { class = "^steam_app_4126220$" },
   game_overlay_rules()
 )
 
@@ -91,13 +139,19 @@ local BAR_NAMESPACE    = "omarchy-bar"
 local GEOMETRY_POLL_MS = 1000
 local EPS              = 1
 
--- Adding a new overlay game? Two spots:
---   1. an o.window(... game_overlay_rules()) rule above with the game's class
---      (find it via `hyprctl clients | grep -iA25 "<game title>"`),
---   2. a class check in is_overlay_window() below so the quickshell-avoidance
---      audit tracks it too.
+-- Adding a new overlay game — two ways:
+--   · quick/managed: add a line to OVERLAY_GAMES in the OVERLAY GAME REGISTRY
+--     block above (the generic rules loop and is_overlay_window() pick it up
+--     automatically). This is what the overlay-games tool edits.
+--   · manual/full control: add BOTH spots by hand —
+--       1. an o.window(... game_overlay_rules()) rule near the registry block
+--          with the game's class (find it via
+--          `hyprctl clients | grep -iA25 "<game title>"`),
+--       2. a class check in is_overlay_window() below so the quickshell-
+--          avoidance audit tracks it too.
 -- The compositor's click-through allowlist (/etc/hypr/clickthrough.conf) is a
--- one-time root setup that already matches every `steam_app_.*` class.
+-- one-time root setup that already matches every `steam_app_.*` class. See
+-- README.md step 7 for the full per-game procedure.
 
 local function is_overlay_window(w)
   local ok, isov = pcall(function()
@@ -108,8 +162,10 @@ local function is_overlay_window(w)
     local cls   = w.class or ""
     local title = w.title or ""
 
-    if cls == "steam_app_4126220" then
-      return true
+    for _, g in ipairs(OVERLAY_GAMES) do
+      if cls == g.class then
+        return true
+      end
     end
     if w.xwayland and cls:match(OVERLAY_GAME_CLASSES) then
       return true
@@ -190,6 +246,14 @@ local function bar_avoid(win)
     pcall(function()
       hl.dispatch(hl.dsp.window.float({ window = win, action = "set" }))
     end)
+    return false
+  end
+
+  -- Widget games own their geometry (idle/desktop-pet games that expand by
+  -- hover) — forcing monitor-minus-bar on them is exactly what made them
+  -- bounce. Keep them floated + click-through, but never resize/move them.
+  local okc, cls = pcall(function() return win.class or "" end)
+  if okc and WIDGET_CLASSES[cls] then
     return false
   end
 

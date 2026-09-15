@@ -31,6 +31,23 @@ overlay-game loop is verified working end-to-end on the test game.
    bar whenever it moves to another edge. Implemented as a self-healing audit
    in `game-overlays.lua` (open re-audits, layer events, and a 1s repeat poll;
    any overlay game already running when the config loads is force-floated).
+3. **Widget mode for idle/desktop-pet games** — a `widget = true` registry flag
+   (see `game-overlays.lua.example`) keeps float + see-through + click-through
+   for idle games that SIZE THEMSELVES by cursor hover, without forcing
+   monitor-minus-bar geometry on them (forcing it made them jitter/bounce
+   against the audit).
+
+### Known limitations
+
+- **Widget mode has no auto-focus** — widget-flagged windows aren't
+  automatically focused/activated when hovered; we still need to figure out
+  the cleanest way to give them focus without breaking the click-through.
+  Known bug, to be handled later.
+- **Widget mode does not auto-avoid Quickshell** — widget games are never
+  resized/moved to line up with the bar. This is deliberate: many such games
+  don't support dynamic resizing, and force-repositioning them against the
+  bar causes the jittering effect. Trade-off: an expanded widget can
+  temporarily cover the bar strip.
 
 ### Not done — roadmap
 
@@ -184,8 +201,12 @@ forced floating — so the config added after a launch still engages.
 
 ### 7. Add the game to the overlay config (per new game)
 
-This is the step users miss: the overlay behaviour is per-game. For each new
-layered-overlay game, register its window class in `~/.config/hypr/game-overlays.lua`
+This is the step users miss: the overlay behaviour is per-game. The **managed
+way** is the separate
+[`overlay-games`](https://github.com/Zombie-W33D/overlay-games) tool (GUI or
+CLI): it writes the registry entry, reloads Hyprland, and marks idle games as
+widgets. **By hand**, for each new layered-overlay game register its window
+class in `~/.config/hypr/game-overlays.lua`
 **before first launch** (find the class while it runs with
 `hyprctl clients | grep -iA25 "<game title>"`):
 

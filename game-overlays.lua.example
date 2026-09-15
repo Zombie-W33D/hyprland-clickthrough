@@ -9,6 +9,8 @@
 --  - Fill the WHOLE MONITOR like fullscreen (size = monitor_w/monitor_h, under
 --    the bar too), pinned top-left (move 0,0), but stay a normal floating
 --    window so the desktop / your windows stay visible underneath.
+--    The Quickshell-avoidance pass below IMMEDIATELY re-sizes each overlay to
+--    "monitor minus the quickshell bar strip" so it never covers the shell.
 --  - Suppress EVERY event a game can use to force fullscreen/maximize on
 --    XWayland ("fullscreen", "maximize", "fullscreenoutput",
 --    "x11configurerequest"): exclusive fullscreen forces an opaque surface and
@@ -19,10 +21,9 @@
 local function game_overlay_rules()
   return {
     float = true,
-    -- Baseline is a full-monitor window. The bar-avoidance pass below
-    -- immediately shrinks/moves it so the Omarchy bar stays uncovered (the
-    -- bar is a layer-shell surface: it reserves no space for floating
-    -- windows), then keeps following the bar whenever it moves.
+    -- Full-monitor baseline (games expect a full screen). The
+    -- quickshell-avoidance audit below immediately shrinks+moves it so the
+    -- bar stays uncovered, then keeps reconciling it every poll tick.
     size = { "monitor_w", "monitor_h" },
     move = { "0", "0" },
     suppress_event = "maximize fullscreen fullscreenoutput x11configurerequest",
@@ -64,19 +65,26 @@ o.window(
 )
 
 -- ---------------------------------------------------------------------------
--- Omarchy bar avoidance
+-- Quickshell (Omarchy bar) avoidance
 --
 -- The overlay is a normal floating XWayland window, so Hyprland never shrinks
 -- it for the bar (exclusive-zone reserved areas only apply to tiled layout).
--- We therefore read the bar's live layer geometry (namespace "omarchy-bar")
--- and resize + offset the overlay so the bar's strip stays uncovered — top,
--- bottom, left or right. Re-applied automatically:
---   - when an overlay window opens,
---   - when a layer with that namespace opens/closes (shell restart, bar
---     appearing/disappearing),
---   - via a light poll (every GEOMETRY_POLL_MS) that only fires when the bar
---     geometry actually changed — needed because dragging the bar to another
---     edge moves the layer without ever reopening it.
+-- We therefore read the quickshell bar's live layer geometry (namespace
+-- "omarchy-bar") and resize + offset each overlay window so the bar's strip
+-- stays uncovered — top, bottom, left or right.
+--
+-- This is a self-healing AUDIT, not a one-shot event fix: every overlay
+-- window is reconciled against "monitor minus the quickshell strip" on
+--   - window.open (plus two quick re-audits, since open can fire before the
+--     window is mapped/floating and window.open alone can miss it),
+--   - layer open/close for the bar namespace (shell restart, bar appearing/
+--     disappearing),
+--   - a repeat poll every GEOMETRY_POLL_MS (catches bar drags and anything
+--     that re-moved the overlay),
+--   - window becoming/leaving fullscreen.
+-- Dispatch only happens when the window's geometry strayed from the target, so
+-- the poll is a cheap no-op at steady state. Result: the game window can never
+-- stay covering the quickshell bar.
 -- ---------------------------------------------------------------------------
 
 local BAR_NAMESPACE    = "omarchy-bar"
@@ -84,20 +92,23 @@ local GEOMETRY_POLL_MS = 1000
 local EPS              = 1
 
 local function is_overlay_window(w)
-  if not w then
-    return false
-  end
+  local ok, isov = pcall(function()
+    if not w then
+      return false
+    end
 
-  local cls   = w.class or ""
-  local title = w.title or ""
+    local cls   = w.class or ""
+    local title = w.title or ""
 
-  if cls == "steam_app_4126220" then
-    return true
-  end
-  if w.xwayland and cls:match(OVERLAY_GAME_CLASSES) then
-    return true
-  end
-  return cls == "steam" and title:match("Crusaders Quest.*Hero Town") ~= nil
+    if cls == "steam_app_4126220" then
+      return true
+    end
+    if w.xwayland and cls:match(OVERLAY_GAME_CLASSES) then
+      return true
+    end
+    return cls == "steam" and title:match("Crusaders Quest.*Hero Town") ~= nil
+  end)
+  return ok and isov
 end
 
 local function first_bar(mon)
@@ -109,9 +120,9 @@ local function first_bar(mon)
   return nil
 end
 
--- Monitor box (mx,my,mw,mh) minus the bar's strip. Returns the box the overlay
--- should occupy. Falls back to the full monitor when the bar is absent,
--- unmapped, or docked in a way that doesn't span a full edge.
+-- Monitor box minus the bar's strip. Returns the box the overlay should
+-- occupy. Falls back to the full monitor when the bar is absent, unmapped, or
+-- docked in a way that doesn't span a full edge.
 local function subtract_bar(mx, my, mw, mh, bar)
   local x, y, w, h = mx, my, mw, mh
   if not bar then
@@ -143,46 +154,105 @@ local function subtract_bar(mx, my, mw, mh, bar)
   return x, y, w, h
 end
 
--- address -> box signature last applied, so we can skip redundant dispatches.
+-- address -> target box signature last applied, so the audit skips windows
+-- that already sit on their budget.
 local applied_to = {}
 
+-- Reconcile one overlay window to its bar budget. Returns true if a dispatch
+-- was issued. Never throws: every Hyprland-object access is pcall-guarded so a
+-- window that died mid-audit is silently skipped, not an error.
 local function bar_avoid(win)
-  if not is_overlay_window(win) or not win.mapped or not win.floating or win.fullscreen ~= 0 then
-    return
+  if not is_overlay_window(win) then
+    return false
   end
 
-  local mon = win.monitor
-  if not mon then
-    return
+  local okm, mapped   = pcall(function() return win.mapped end)
+  local okf, floating = pcall(function() return win.floating end)
+  local oks, fullsc   = pcall(function() return win.fullscreen end)
+  if not okm or not okf or not oks or not mapped or not floating or fullsc ~= 0 then
+    -- Not placed yet. The repeat poll will pick it up once it is.
+    return false
   end
 
-  local x, y, w, h = subtract_bar(mon.x, mon.y, mon.width, mon.height, first_bar(mon))
-
-  local sig  = string.format("%d@%d@%d@%d", x, y, w, h)
-  local addr = win.address
-  if applied_to[addr] == sig then
-    return
+  local okmon, mon = pcall(function() return win.monitor end)
+  if not okmon or not mon then
+    return false
   end
 
-local ok = pcall(function()
-    -- resize first (absolute, keeps top-left), then move it to sit below/right
-    -- of the bar. Both target this window explicitly. Dispatcher builders
-    -- return a dispatcher object; run it via hl.dispatch().
-    hl.dispatch(hl.dsp.window.resize({ x = w, y = h, window = win }))
-    hl.dispatch(hl.dsp.window.move({ x = x, y = y, window = win }))
+  local okbox, box = pcall(function()
+    local bx, by, bw, bh = mon.x, mon.y, mon.width, mon.height
+    local x, y, w, h     = subtract_bar(bx, by, bw, bh, first_bar(mon))
+    return { x = x, y = y, w = w, h = h }
   end)
-  if ok then
-    applied_to[addr] = sig
+  if not okbox or not box then
+    return false
   end
+
+  local sig  = string.format("%d@%d@%d@%d", box.x, box.y, box.w, box.h)
+  local addr = win.address
+
+  -- Already on budget? Check both the last-applied target and the window's
+  -- current goal geometry, so anything that re-strayed the window (game
+  -- reshape, missed window.open, ...) gets pulled back on the next tick.
+  local okgoal, already = pcall(function()
+    local at, sz = win.at, win.size
+    return at.x == box.x and at.y == box.y and sz.x == box.w and sz.y == box.h
+  end)
+  if okgoal and already and applied_to[addr] == sig then
+    return false
+  end
+
+  local okd = pcall(function()
+    hl.dispatch(hl.dsp.window.resize({ x = box.w, y = box.h, window = win }))
+    hl.dispatch(hl.dsp.window.move({ x = box.x, y = box.y, window = win }))
+  end)
+  if okd then
+    applied_to[addr] = sig
+    return true
+  end
+
+  return false
 end
 
 local function bar_avoid_all()
-  for _, win in ipairs(hl.get_windows()) do
+  local ok, ws = pcall(hl.get_windows)
+  if not (ok and ws) then
+    return
+  end
+
+  for _, win in ipairs(ws) do
     bar_avoid(win)
   end
 end
 
-hl.on("window.open", bar_avoid)
+-- Schedule a short re-audit without piling up timers.
+local audit_pending = {}
+
+local function schedule_audit(delayMs)
+  if audit_pending[delayMs] then
+    return
+  end
+  audit_pending[delayMs] = true
+  hl.timer(function()
+    audit_pending[delayMs] = nil
+    bar_avoid_all()
+  end, { timeout = delayMs, type = "oneshot" })
+end
+
+hl.on("window.open", function(win)
+  bar_avoid(win)
+  -- window.open fires before the window is mapped/floating; the repeat poll
+  -- would fix it within a second anyway, but these make a fresh overlay snap
+  -- to its bar budget promptly.
+  schedule_audit(200)
+  schedule_audit(1000)
+end)
+
+hl.on("window.fullscreen", function(win)
+  if win then
+    bar_avoid(win)
+  end
+end)
 
 hl.on("layer.opened", function(ls)
   if ls and ls.namespace == BAR_NAMESPACE then
@@ -196,47 +266,11 @@ hl.on("layer.closed", function(ls)
   end
 end)
 
--- The bar can be dragged to another edge live without the layer closing, so
--- also poll its geometry. Cheap no-op unless the signature actually changed.
-local last_bars = {}
-
-local function bar_signatures()
-  local sigs = {}
-  for _, mon in ipairs(hl.get_monitors()) do
-    sigs[mon.name] = ""
-    for _, ls in ipairs(hl.get_layers({ monitor = mon, namespace = BAR_NAMESPACE })) do
-      if ls.mapped then
-        sigs[mon.name] = string.format("%d,%d,%d,%d", ls.x, ls.y, ls.w, ls.h)
-      end
-    end
-  end
-  return sigs
-end
-
-local function poll_bar_geometry()
-  local sigs = bar_signatures()
-
-  if not next(last_bars) then
-    last_bars = sigs
-    return
-  end
-
-  local changed = false
-  for name, sig in pairs(sigs) do
-    if last_bars[name] ~= sig then
-      changed = true
-      break
-    end
-  end
-  last_bars = sigs
-
-  if changed then
-    bar_avoid_all()
-  end
-end
-
-hl.timer(poll_bar_geometry, { timeout = GEOMETRY_POLL_MS, type = "repeat" })
+-- Repeat audit: reconciles every overlay window to "monitor minus the bar"
+-- regardless of what moved (bar dragged to another edge without the layer
+-- closing, window.open missed, game reshaped itself, ...). No-op at steady
+-- state thanks to the applied/geometry guards above.
+hl.timer(bar_avoid_all, { timeout = GEOMETRY_POLL_MS, type = "repeat" })
 
 -- Catch windows that were already open when this config (re)loaded.
 bar_avoid_all()
-

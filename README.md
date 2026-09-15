@@ -44,6 +44,9 @@ overlay-game loop is verified working end-to-end on the test game.
   regular (non-widget) launch, but happens sometimes in both. The same
   workaround kicks it into a reliable state from then on: a few manual focus
   changes. Note for later investigation.
+- **Cursor warp to screen center on focus-out** — sometimes when focus changes
+  from the game to something else, the mouse jumps to the center of the
+  screen. Fix soon.
 - **Widget mode does not auto-avoid Quickshell** — widget games are never
   resized/moved to line up with the bar. This is deliberate: many such games
   don't support dynamic resizing, and force-repositioning them against the
